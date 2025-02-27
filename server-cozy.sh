@@ -324,7 +324,6 @@ handle_special_packages() {
           fi
           cargo install exa
         }
-        }
         ;;
       *)
         log "WARNING" "Skipping exa installation for this OS type."
