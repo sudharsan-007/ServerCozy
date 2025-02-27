@@ -66,6 +66,7 @@ RECOMMENDED_TOOLS=(
   "tldr:Simplified man pages"
   "jq:Lightweight and flexible command-line JSON processor"
   "fzf:Command-line fuzzy finder"
+  "macchina:Minimal system information frontend"
 )
 
 ADVANCED_TOOLS=(
@@ -537,7 +538,11 @@ if command -v bat &>/dev/null; then
 fi
 
 # System information
-alias sysinfo='echo -e "\n$(hostname) $(date)" && cat /etc/*release && echo -e "\nKernel: $(uname -r)" && echo -e "Memory: $(free -h | grep Mem | awk "{print \$3\"/\"\$2}")" && echo -e "Disk: $(df -h / | grep / | awk "{print \$3\"/\"\$2}")"'
+if command -v macchina &>/dev/null; then
+  alias sysinfo='macchina'
+else
+  alias sysinfo='echo -e "\n$(hostname) $(date)" && cat /etc/*release && echo -e "\nKernel: $(uname -r)" && echo -e "Memory: $(free -h | grep Mem | awk "{print \$3\"/\"\$2}")" && echo -e "Disk: $(df -h / | grep / | awk "{print \$3\"/\"\$2}")"'
+fi
 
 # Git repositories status
 alias repofetch='find . -maxdepth 3 -type d -name ".git" | while read dir; do cd $(dirname $dir) && echo -e "\033[1;36m$(basename $(pwd))\033[0m: $(git branch --show-current) [$(git config --get remote.origin.url 2>/dev/null || echo "No remote")]" && cd - > /dev/null; done'

@@ -25,7 +25,7 @@ Moving into a new server should feel like coming home. ServerCozy automates the 
 
 - **Three-Tier Package Installation**
   - **Essential Tools**: git, curl, wget, htop, tree, unzip, vim, tmux
-  - **Recommended Tools**: exa (modern ls), bat (better cat), ncdu, tldr, jq, fzf
+  - **Recommended Tools**: exa (modern ls), bat (better cat), ncdu, tldr, jq, fzf, macchina (system info)
   - **Advanced Tools**: ripgrep, fd, neofetch, micro, zoxide, btop
 
 - **Terminal Improvements**
@@ -108,6 +108,7 @@ chmod +x server-cozy.sh
 | tldr | Simplified man pages |
 | jq | Lightweight and flexible command-line JSON processor |
 | fzf | Command-line fuzzy finder |
+| macchina | Minimal system information frontend |
 
 ### Advanced Tools
 
@@ -145,7 +146,7 @@ alias lt='exa -T --icons'
 alias cat='bat'  # If bat is installed
 
 # System information
-alias sysinfo='echo -e "\n$(hostname) $(date)" && cat /etc/*release && echo -e "\nKernel: $(uname -r)" && echo -e "Memory: $(free -h | grep Mem | awk "{print \$3\"/\"\$2}")" && echo -e "Disk: $(df -h / | grep / | awk "{print \$3\"/\"\$2}")"'
+alias sysinfo='macchina'  # If macchina is installed, otherwise falls back to a custom display
 
 # Git repositories status
 alias repofetch='find . -maxdepth 3 -type d -name ".git" | while read dir; do cd $(dirname $dir) && echo -e "\033[1;36m$(basename $(pwd))\033[0m: $(git branch --show-current) [$(git config --get remote.origin.url 2>/dev/null || echo "No remote")]" && cd - > /dev/null; done'
@@ -219,4 +220,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Acknowledgments
 
 - Inspired by countless hours of repetitive server setup
-- Thanks to all the amazing open-source tools this project builds upo
+- Thanks to all the amazing open-source tools this project builds upon
