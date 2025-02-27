@@ -350,6 +350,42 @@ handle_special_packages() {
         ;;
     esac
   fi
+  
+  # Special case for pfetch - install from GitHub
+  if ! command -v pfetch &>/dev/null && [ -n "$(echo "${selected_packages[@]}" | grep -o "pfetch")" ]; then
+    log "INFO" "Installing pfetch from GitHub..."
+    
+    # Create a temporary directory
+    local temp_dir="/tmp/pfetch_install"
+    mkdir -p "$temp_dir"
+    cd "$temp_dir"
+    
+    # Download pfetch from GitHub
+    log "INFO" "Downloading pfetch..."
+    if wget https://github.com/dylanaraps/pfetch/archive/master.zip; then
+      # Extract the zip file
+      log "INFO" "Extracting pfetch..."
+      unzip master.zip
+      
+      # Install pfetch
+      log "INFO" "Installing pfetch to /usr/local/bin/..."
+      sudo install pfetch-master/pfetch /usr/local/bin/
+      
+      # Clean up
+      cd - > /dev/null
+      rm -rf "$temp_dir"
+      
+      if command -v pfetch &>/dev/null; then
+        log "SUCCESS" "pfetch installed successfully."
+      else
+        log "ERROR" "Failed to install pfetch."
+      fi
+    else
+      log "ERROR" "Failed to download pfetch from GitHub."
+      cd - > /dev/null
+      rm -rf "$temp_dir"
+    fi
+  fi
 }
 
 # Function to install JetBrainsMono Nerd Font
