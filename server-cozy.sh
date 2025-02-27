@@ -321,8 +321,9 @@ handle_special_packages() {
             log "INFO" "Installing rust to build exa..."
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             source $HOME/.cargo/env
-          }
+          fi
           cargo install exa
+        }
         }
         ;;
       *)
