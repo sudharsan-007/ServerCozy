@@ -36,6 +36,8 @@ CONFIGURE_PROMPT=true
 CONFIGURE_ALIASES=true
 CONFIGURE_VIM=true
 LOG_FILE="/tmp/servercozy-$(date +%Y%m%d%H%M%S).log"
+# Array to store selected packages
+declare -a SELECTED_PACKAGES
 
 # Colors
 RED='\033[0;31m'
@@ -208,6 +210,12 @@ install_package() {
     return 0
   fi
   
+  # Skip standard installation for pfetch - it will be handled in handle_special_packages
+  if [ "$package_name" = "pfetch" ]; then
+    log "INFO" "Skipping standard installation for pfetch. Will install from GitHub later."
+    return 0
+  fi
+  
   log "INFO" "Installing $package_name ($description)..."
   
   case $PKG_MANAGER in
@@ -233,7 +241,8 @@ install_package() {
 
 # Function to display package selection
 select_packages() {
-  local selected_packages=()
+  # Clear the global array
+  SELECTED_PACKAGES=()
   
   echo -e "\n${BOLD}${CYAN}Select packages to install:${NC}"
   
@@ -244,11 +253,11 @@ select_packages() {
       read -p "Install $pkg ($desc)? [Y/n] " choice
       choice=${choice:-Y}
       if [[ $choice =~ ^[Yy]$ ]]; then
-        selected_packages+=("$tool")
+        SELECTED_PACKAGES+=("$tool")
       fi
     else
       if [ "$INSTALL_ESSENTIALS" = true ]; then
-        selected_packages+=("$tool")
+        SELECTED_PACKAGES+=("$tool")
       fi
     fi
   done
@@ -260,11 +269,11 @@ select_packages() {
       read -p "Install $pkg ($desc)? [Y/n] " choice
       choice=${choice:-Y}
       if [[ $choice =~ ^[Yy]$ ]]; then
-        selected_packages+=("$tool")
+        SELECTED_PACKAGES+=("$tool")
       fi
     else
       if [ "$INSTALL_RECOMMENDED" = true ]; then
-        selected_packages+=("$tool")
+        SELECTED_PACKAGES+=("$tool")
       fi
     fi
   done
@@ -276,11 +285,11 @@ select_packages() {
       read -p "Install $pkg ($desc)? [y/N] " choice
       choice=${choice:-N}
       if [[ $choice =~ ^[Yy]$ ]]; then
-        selected_packages+=("$tool")
+        SELECTED_PACKAGES+=("$tool")
       fi
     else
       if [ "$INSTALL_ADVANCED" = true ]; then
-        selected_packages+=("$tool")
+        SELECTED_PACKAGES+=("$tool")
       fi
     fi
   done
@@ -288,7 +297,7 @@ select_packages() {
   echo
   
   # Install selected packages
-  for tool in "${selected_packages[@]}"; do
+  for tool in "${SELECTED_PACKAGES[@]}"; do
     IFS=':' read -r pkg desc <<< "$tool"
     install_package "$pkg" "$desc"
   done
@@ -297,7 +306,7 @@ select_packages() {
 # Function to handle special package cases
 handle_special_packages() {
   # Special case for exa which might need to be installed differently
-  if ! command -v exa &>/dev/null && [ -n "$(echo "${selected_packages[@]}" | grep -o "exa")" ]; then
+  if ! command -v exa &>/dev/null && [ -n "$(echo "${SELECTED_PACKAGES[@]}" | grep -o "exa")" ]; then
     log "INFO" "Installing exa (modern ls replacement)..."
     
     case $OS_TYPE in
@@ -332,7 +341,7 @@ handle_special_packages() {
     esac
   fi
   # Special case for bat which might be named differently
-  if ! command -v bat &>/dev/null && [ -n "$(echo "${selected_packages[@]}" | grep -o "bat")" ]; then
+  if ! command -v bat &>/dev/null && [ -n "$(echo "${SELECTED_PACKAGES[@]}" | grep -o "bat")" ]; then
     log "INFO" "Checking for bat alternatives..."
     
     case $OS_TYPE in
@@ -352,7 +361,7 @@ handle_special_packages() {
   fi
   
   # Special case for pfetch - install from GitHub
-  if ! command -v pfetch &>/dev/null && [ -n "$(echo "${selected_packages[@]}" | grep -o "pfetch")" ]; then
+  if ! command -v pfetch &>/dev/null && [ -n "$(echo "${SELECTED_PACKAGES[@]}" | grep -o "pfetch")" ]; then
     log "INFO" "Installing pfetch from GitHub..."
     
     # Create a temporary directory
