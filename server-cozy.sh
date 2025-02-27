@@ -66,7 +66,7 @@ RECOMMENDED_TOOLS=(
   "tldr:Simplified man pages"
   "jq:Lightweight and flexible command-line JSON processor"
   "fzf:Command-line fuzzy finder"
-  "macchina:Minimal system information frontend"
+  "pfetch:Simple system information tool"
 )
 
 ADVANCED_TOOLS=(
@@ -350,66 +350,6 @@ handle_special_packages() {
         ;;
     esac
   fi
-  
-  # Special case for macchina which might need to be installed via cargo
-  if ! command -v macchina &>/dev/null && [ -n "$(echo "${selected_packages[@]}" | grep -o "macchina")" ]; then
-    log "INFO" "Installing macchina (system information frontend)..."
-    
-    # Try to install from package manager first
-    case $PKG_MANAGER in
-      apt)
-        sudo add-apt-repository -y ppa:o2sh/onefetch 2>/dev/null || true
-        sudo apt update
-        sudo apt install -y macchina 2>/dev/null || {
-          log "INFO" "macchina not found in repositories, installing via cargo..."
-          if ! command -v cargo &>/dev/null; then
-            log "INFO" "Installing rust to build macchina..."
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source $HOME/.cargo/env
-          fi
-          cargo install macchina
-        }
-        ;;
-      dnf|yum)
-        sudo $PKG_MANAGER install -y macchina 2>/dev/null || {
-          log "INFO" "macchina not found in repositories, installing via cargo..."
-          if ! command -v cargo &>/dev/null; then
-            log "INFO" "Installing rust to build macchina..."
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source $HOME/.cargo/env
-          fi
-          cargo install macchina
-        }
-        ;;
-      apk)
-        sudo apk add macchina 2>/dev/null || {
-          log "INFO" "macchina not found in repositories, installing via cargo..."
-          if ! command -v cargo &>/dev/null; then
-            log "INFO" "Installing rust to build macchina..."
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source $HOME/.cargo/env
-          fi
-          cargo install macchina
-        }
-        ;;
-      *)
-        log "INFO" "Installing macchina via cargo..."
-        if ! command -v cargo &>/dev/null; then
-          log "INFO" "Installing rust to build macchina..."
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-        fi
-        cargo install macchina
-        ;;
-    esac
-    
-    if command -v macchina &>/dev/null; then
-      log "SUCCESS" "macchina installed successfully."
-    else
-      log "WARNING" "Failed to install macchina. The sysinfo alias will use the default implementation."
-    fi
-  fi
-  fi
 }
 
 # Function to install JetBrainsMono Nerd Font
@@ -597,8 +537,8 @@ if command -v bat &>/dev/null; then
 fi
 
 # System information
-if command -v macchina &>/dev/null; then
-  alias sysinfo='macchina'
+if command -v pfetch &>/dev/null; then
+  alias sysinfo='pfetch'
 else
   alias sysinfo='echo -e "\n$(hostname) $(date)" && cat /etc/*release && echo -e "\nKernel: $(uname -r)" && echo -e "Memory: $(free -h | grep Mem | awk "{print \$3\"/\"\$2}")" && echo -e "Disk: $(df -h / | grep / | awk "{print \$3\"/\"\$2}")"'
 fi
