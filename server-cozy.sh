@@ -364,8 +364,35 @@ install_nerd_font() {
   mkdir -p "$font_dir"
   
   # Download JetBrainsMono Nerd Font
-  curl -fLo "$font_dir/JetBrainsMono Medium Nerd Font Complete Mono.ttf" \
-    https://github.com/ryanoasis/nerd-fonts/raw/master/patched-fonts/JetBrainsMono/Ligatures/Medium/complete/JetBrains%20Mono%20Medium%20Nerd%20Font%20Complete%20Mono.ttf
+  log "INFO" "Downloading JetBrainsMono Nerd Font..."
+  
+  # The GitHub raw URL structure has changed, using a more reliable approach
+  local font_url="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip"
+  local temp_zip="/tmp/JetBrainsMono.zip"
+  
+  # Download the zip file
+  if curl -fLo "$temp_zip" "$font_url"; then
+    log "INFO" "Font downloaded successfully, extracting..."
+    
+    # Create a temporary directory for extraction
+    local temp_dir="/tmp/jetbrains_font"
+    mkdir -p "$temp_dir"
+    
+    # Extract the zip file
+    unzip -q "$temp_zip" -d "$temp_dir"
+    
+    # Copy the Medium variant to the fonts directory
+    cp "$temp_dir/JetBrains Mono Medium Nerd Font Complete Mono.ttf" "$font_dir/" 2>/dev/null || \
+    cp "$temp_dir/JetBrainsMono Medium Nerd Font Complete Mono.ttf" "$font_dir/" 2>/dev/null || \
+    cp "$temp_dir"/*Medium*Mono.ttf "$font_dir/" 2>/dev/null || \
+    cp "$temp_dir"/*.ttf "$font_dir/" 2>/dev/null
+    
+    # Clean up
+    rm -rf "$temp_dir" "$temp_zip"
+    log "INFO" "Font files extracted to $font_dir"
+  else
+    log "WARNING" "Failed to download font. Continuing without Nerd Font installation."
+  fi
   
   # Update font cache
   if command -v fc-cache &>/dev/null; then
