@@ -114,7 +114,7 @@ check_executable() {
 }
 
 # Script version
-VERSION="1.9.2"
+VERSION="1.9.3"
 SCRIPT_VERSION="$VERSION"
 
 # Default values
@@ -129,6 +129,7 @@ CONFIGURE_VIM=true
 USE_DIALOG=true  # By default, use dialog TUI if available
 DIALOG_AVAILABLE=false  # Will be set to true if dialog is available/installed
 LOG_FILE="/tmp/servercozy-$(date +%Y%m%d%H%M%S).log"
+LOG_DEBUG=false  # Debug logging flag - set to true to enable verbose debug logs
 USER_INSTALL_ONLY=false # Default to system-wide installation
 SUDO_CMD="" # Command to use for privileged operations (sudo, doas, or empty for root)
 SUDO_AVAILABLE=false # Whether sudo is available
