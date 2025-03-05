@@ -35,6 +35,8 @@ INSTALL_NERD_FONT=true
 CONFIGURE_PROMPT=true
 CONFIGURE_ALIASES=true
 CONFIGURE_VIM=true
+USE_DIALOG=true  # By default, use dialog TUI if available
+DIALOG_AVAILABLE=false  # Will be set to true if dialog is available/installed
 LOG_FILE="/tmp/servercozy-$(date +%Y%m%d%H%M%S).log"
 # Array to store selected packages
 declare -a SELECTED_PACKAGES
@@ -93,6 +95,7 @@ show_help() {
   echo -e "${YELLOW}${BOLD}Options:${NC}"
   echo "  --non-interactive    Run with default selections"
   echo "  --essential-only     Install only essential tools"
+  echo "  --no-dialog          Force text-based interface (don't use dialog TUI)"
   echo "  --help               Show this help message"
   echo
   echo -e "${YELLOW}${BOLD}Examples:${NC}"
@@ -239,8 +242,100 @@ install_package() {
   fi
 }
 
-# Function to create a simple checkbox menu that works in all terminals
-interactive_menu() {
+# Function to create a dialog-based checklist menu
+dialog_menu() {
+  local items_array_name=$1     # Name of the array containing items
+  local selected_array_name=$2  # Name of the array to store selected indices
+  local title=$3                # Title to display
+  local default_state=$4        # Default selection state (true/false)
+  
+  # Get the array content through indirect reference
+  eval "local items=(\"\${$items_array_name[@]}\")"
+  
+  # Temporary file to store dialog output
+  local temp_file=$(mktemp)
+  
+  # Prepare dialog options
+  local dialog_options=()
+  local tag status item
+
+  # Get terminal size for better dialog sizing
+  local term_height=$(tput lines)
+  local term_width=$(tput cols)
+  
+  # Calculate dialog height and width (75% of terminal)
+  local dialog_height=$((term_height * 3 / 4))
+  local dialog_width=$((term_width * 3 / 4))
+  
+  # Ensure minimum dimensions
+  [ $dialog_height -lt 20 ] && dialog_height=20
+  [ $dialog_width -lt 75 ] && dialog_width=75
+  
+  # Calculate list height (dialog height minus overhead)
+  local list_height=$((dialog_height - 8))
+  
+  # Build dialog options
+  for i in "${!items[@]}"; do
+    IFS=':' read -r item desc <<< "${items[$i]}"
+    if [ "$default_state" = true ]; then
+      status="ON"
+    else
+      status="OFF"
+    fi
+    dialog_options+=("$item" "$desc" "$status")
+  done
+  
+  # Run the dialog checklist
+  dialog --backtitle "ServerCozy v${VERSION}" \
+         --title "$title" \
+         --checklist "Use UP/DOWN arrows to navigate, SPACE to toggle selection, ENTER to confirm" \
+         $dialog_height $dialog_width $list_height \
+         "${dialog_options[@]}" 2> "$temp_file"
+  
+  # Check if user cancelled with ESC or Cancel button
+  if [ $? -ne 0 ]; then
+    # If user cancelled, use all options if default_state is true, or none if false
+    if [ "$default_state" = true ]; then
+      # Select all items
+      eval "$selected_array_name=()"
+      for i in "${!items[@]}"; do
+        eval "$selected_array_name+=($i)"
+      done
+    else
+      # Select no items
+      eval "$selected_array_name=()"
+    fi
+    rm -f "$temp_file"
+    return
+  fi
+  
+  # Process dialog output - convert to array indices
+  eval "$selected_array_name=()"
+  
+  # Read selections from temp file
+  local selections=$(cat "$temp_file")
+  
+  # Clean up temp file
+  rm -f "$temp_file"
+  
+  # Process each selected item
+  for selected in $selections; do
+    # Remove quotes if present
+    selected=${selected//\"/}
+    
+    # Find the index of this item in the original array
+    for i in "${!items[@]}"; do
+      IFS=':' read -r item desc <<< "${items[$i]}"
+      if [ "$item" = "$selected" ]; then
+        eval "$selected_array_name+=($i)"
+        break
+      fi
+    done
+  done
+}
+
+# Function to create a simple text-based checkbox menu
+text_menu() {
   local items_array_name=$1     # Name of the array containing items
   local selected_array_name=$2  # Name of the array to store selected indices
   local title=$3                # Title to display
@@ -314,6 +409,20 @@ interactive_menu() {
       eval "$selected_array_name+=($i)"
     fi
   done
+}
+
+# Function to choose between dialog and text menu based on availability
+interactive_menu() {
+  local items_array_name=$1     # Name of the array containing items
+  local selected_array_name=$2  # Name of the array to store selected indices
+  local title=$3                # Title to display
+  local default_state=$4        # Default selection state (true/false)
+  
+  if [ "$DIALOG_AVAILABLE" = true ]; then
+    dialog_menu "$items_array_name" "$selected_array_name" "$title" "$default_state"
+  else
+    text_menu "$items_array_name" "$selected_array_name" "$title" "$default_state"
+  fi
 }
 
 # Function to display package selection
@@ -812,6 +921,61 @@ show_summary() {
   echo -e "${GRAY}Log file saved to: $LOG_FILE${NC}"
 }
 
+# Function to check for dialog and install if needed
+check_dialog() {
+  log "INFO" "Checking for dialog utility..."
+  
+  if [ "$USE_DIALOG" = false ]; then
+    log "INFO" "Dialog TUI disabled by user preference."
+    DIALOG_AVAILABLE=false
+    return 0
+  fi
+  
+  if command -v dialog &>/dev/null; then
+    log "SUCCESS" "Dialog utility found."
+    DIALOG_AVAILABLE=true
+    return 0
+  fi
+  
+  # Dialog not installed, ask user what to do
+  echo -e "\n${YELLOW}${BOLD}Dialog utility not found${NC}"
+  echo -e "Dialog is recommended for a better user interface experience."
+  echo -e "It provides a full-screen menu with arrow key navigation and space key selection."
+  echo
+  echo -e "Would you like to install dialog? (y/n)"
+  echo -e "1. ${GREEN}Yes${NC} - Install dialog (recommended)"
+  echo -e "2. ${YELLOW}No${NC}  - Continue with basic text interface"
+  
+  read -p "> " install_dialog
+  
+  if [[ "$install_dialog" =~ ^[Yy]|1$ ]]; then
+    log "INFO" "Installing dialog..."
+    
+    case $PKG_MANAGER in
+      apt)
+        sudo apt install -y dialog
+        ;;
+      dnf|yum)
+        sudo $PKG_MANAGER install -y dialog
+        ;;
+      apk)
+        sudo apk add dialog
+        ;;
+    esac
+    
+    if command -v dialog &>/dev/null; then
+      log "SUCCESS" "Dialog installed successfully."
+      DIALOG_AVAILABLE=true
+    else
+      log "WARNING" "Failed to install dialog. Falling back to text-based interface."
+      DIALOG_AVAILABLE=false
+    fi
+  else
+    log "INFO" "Continuing without dialog. Using text-based interface."
+    DIALOG_AVAILABLE=false
+  fi
+}
+
 # Function to check sudo access
 check_sudo() {
   log "INFO" "Checking sudo access..."
@@ -853,6 +1017,9 @@ main() {
   # Update package repositories
   update_package_repos
   
+  # Check for dialog availability
+  check_dialog
+  
   # Select and install packages
   select_packages
   
@@ -886,6 +1053,10 @@ while [[ $# -gt 0 ]]; do
       INSTALL_ESSENTIALS=true
       INSTALL_RECOMMENDED=false
       INSTALL_ADVANCED=false
+      shift
+      ;;
+    --no-dialog)
+      USE_DIALOG=false
       shift
       ;;
     --help)
