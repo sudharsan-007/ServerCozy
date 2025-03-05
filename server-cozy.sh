@@ -64,7 +64,7 @@ ESSENTIAL_TOOLS=(
 )
 
 RECOMMENDED_TOOLS=(
-  "exa:Modern replacement for ls"
+  "eza:Modern replacement for ls (successor to exa)"
   "bat:Cat clone with syntax highlighting"
   "ncdu:Disk usage analyzer with ncurses interface"
   "tldr:Simplified man pages"
@@ -502,40 +502,124 @@ select_packages() {
 
 # Function to handle special package cases
 handle_special_packages() {
-  # Special case for exa which might need to be installed differently
-  if ! command -v exa &>/dev/null && [ -n "$(echo "${SELECTED_PACKAGES[@]}" | grep -o "exa")" ]; then
-    log "INFO" "Installing exa (modern ls replacement)..."
+  # Special case for eza (successor to exa)
+  if ! command -v eza &>/dev/null && [ -n "$(echo "${SELECTED_PACKAGES[@]}" | grep -o "eza")" ]; then
+    log "INFO" "Installing eza (modern ls replacement)..."
     
+    install_success=false
+    
+    # Step 1: Try package manager installation based on distro
     case $OS_TYPE in
       debian)
-        if ! command -v cargo &>/dev/null; then
-          # Try to install from package if available
-          sudo apt install -y exa || {
-            # If not available, install rustup and use cargo
-            log "INFO" "Installing rust to build exa..."
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source $HOME/.cargo/env
-            cargo install exa
-          }
+        # Try to add official eza repository for Debian/Ubuntu
+        log "INFO" "Setting up eza repository for Debian/Ubuntu..."
+        
+        # Ensure required tools are installed
+        sudo apt update
+        sudo apt install -y gpg curl wget 2>/dev/null
+        
+        # Add the eza repository
+        sudo mkdir -p /etc/apt/keyrings
+        wget -qO- https://raw.githubusercontent.com/eza-community/eza/main/deb.asc | sudo gpg --dearmor -o /etc/apt/keyrings/gierens.gpg 2>/dev/null
+        echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" | sudo tee /etc/apt/sources.list.d/gierens.list >/dev/null
+        sudo chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list 2>/dev/null
+        
+        # Update and install
+        if sudo apt update && sudo apt install -y eza; then
+          log "SUCCESS" "Installed eza from official repository."
+          install_success=true
         else
-          cargo install exa
+          log "WARNING" "Failed to install eza from repository."
         fi
         ;;
       redhat)
-        # Try specific package name or use cargo
-        sudo $PKG_MANAGER install -y exa || {
-          if ! command -v cargo &>/dev/null; then
-            log "INFO" "Installing rust to build exa..."
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source $HOME/.cargo/env
-          fi
-          cargo install exa
-        }
+        # For Fedora, eza is in the official repositories
+        if sudo $PKG_MANAGER install -y eza 2>/dev/null; then
+          log "SUCCESS" "Installed eza from official repository."
+          install_success=true
+        else
+          log "WARNING" "Failed to install eza from repository."
+        fi
+        ;;
+      alpine)
+        # For Alpine
+        if sudo apk add eza 2>/dev/null; then
+          log "SUCCESS" "Installed eza from Alpine repository."
+          install_success=true
+        else
+          log "WARNING" "Failed to install eza from repository."
+        fi
         ;;
       *)
-        log "WARNING" "Skipping exa installation for this OS type."
+        log "INFO" "No predefined repository for this OS. Trying alternative methods."
         ;;
     esac
+    
+    # Step 2: If package manager failed, try downloading pre-built binary
+    if [ "$install_success" = false ]; then
+      log "INFO" "Trying to download pre-built binary..."
+      
+      # Create temp directory for download
+      local temp_dir="/tmp/eza_install"
+      mkdir -p "$temp_dir"
+      cd "$temp_dir"
+      
+      # Determine system architecture
+      local arch="$(uname -m)"
+      local target=""
+      
+      case "$arch" in
+        x86_64)
+          target="x86_64-unknown-linux-gnu"
+          ;;
+        aarch64|arm64)
+          target="aarch64-unknown-linux-gnu"
+          ;;
+        *)
+          log "WARNING" "Unsupported architecture: $arch"
+          ;;
+      esac
+      
+      if [ -n "$target" ]; then
+        # Try to download and install the pre-built binary
+        if curl -L -o eza.tar.gz "https://github.com/eza-community/eza/releases/latest/download/eza_${target}.tar.gz" 2>/dev/null; then
+          tar -xzf eza.tar.gz
+          sudo install -m755 eza /usr/local/bin/eza 2>/dev/null
+          
+          if command -v eza &>/dev/null; then
+            log "SUCCESS" "Installed eza from pre-built binary."
+            install_success=true
+          else
+            log "WARNING" "Failed to install eza binary."
+          fi
+        else
+          log "WARNING" "Failed to download eza binary."
+        fi
+      fi
+      
+      # Clean up temp directory
+      cd - > /dev/null
+      rm -rf "$temp_dir"
+    fi
+    
+    # Step 3: If binary installation failed and cargo is available, try cargo
+    if [ "$install_success" = false ] && command -v cargo &>/dev/null; then
+      log "INFO" "Trying to install eza via cargo..."
+      if cargo install eza; then
+        log "SUCCESS" "Installed eza via cargo."
+        install_success=true
+      else
+        log "WARNING" "Failed to install eza via cargo."
+      fi
+    fi
+    
+    # If installation succeeded, create exa symlink for backward compatibility
+    if [ "$install_success" = true ]; then
+      log "INFO" "Creating 'exa' symlink for backward compatibility..."
+      sudo ln -sf "$(which eza)" /usr/local/bin/exa 2>/dev/null
+    else
+      log "WARNING" "Could not install eza. Standard ls will be used instead."
+    fi
   fi
   # Special case for bat which might be named differently
   if ! command -v bat &>/dev/null && [ -n "$(echo "${SELECTED_PACKAGES[@]}" | grep -o "bat")" ]; then
@@ -764,7 +848,12 @@ alias la='ls -A'
 alias l='ls -CF'
 
 # Enhanced commands (if installed)
-if command -v exa &>/dev/null; then
+if command -v eza &>/dev/null; then
+  alias ls='eza --icons'
+  alias ll='eza -alF --icons'
+  alias lt='eza -T --icons'
+elif command -v exa &>/dev/null; then
+  # Backward compatibility for exa
   alias ls='exa --icons'
   alias ll='exa -alF --icons'
   alias lt='exa -T --icons'
