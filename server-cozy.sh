@@ -2040,7 +2040,7 @@ check_for_updates() {
   log "INFO" "Checking for script updates..."
   
   # Define remote repo URL
-  local repo_url="https://raw.githubusercontent.com/sudharsanananth/servercozy/main/server-cozy.sh"
+  local repo_url="https://raw.githubusercontent.com/sudharsan-007/servercozy/main/server-cozy.sh"
   local temp_script="/tmp/server-cozy-latest.sh"
   
   # Download the latest version
