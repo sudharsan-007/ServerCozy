@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # server-cozy.sh - ServerCozy
 #
@@ -21,10 +21,100 @@
 #   ./server-cozy.sh
 #   ./server-cozy.sh --essential-only
 
-set -e
+# Enhanced error handling
+set -o pipefail # Exit if any command in a pipeline fails
+set -u          # Treat unset variables as errors
+set -E          # Ensure ERR trap is inherited by shell functions
+
+# Check for bash as this script uses bash-specific features
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "Error: This script requires bash to run."
+  echo "Please run this script with bash: bash $(basename "$0")"
+  exit 1
+fi
+
+# Global variables for cleanup and state tracking
+temp_zip=""
+temp_dir=""
+installation_step=""
+restored_files=()
+backup_files=()
+
+# Cleanup function to remove temporary files on exit
+cleanup() {
+  # Remove any temporary files
+  [ -n "$temp_zip" ] && [ -f "$temp_zip" ] && rm -f "$temp_zip"
+  [ -n "$temp_dir" ] && [ -d "$temp_dir" ] && rm -rf "$temp_dir"
+  
+  # Log the cleanup
+  echo "Cleanup complete" >> "$LOG_FILE"
+}
+
+# Error handler function for controlled failures
+error_handler() {
+  local err=$?
+  local line=$1
+  local command="${BASH_COMMAND}"
+  
+  # Only execute if this is a real error, not just a trapped exit
+  if [ $err -ne 0 ]; then
+    echo -e "\n${RED}${BOLD}Error occurred:${NC} at line $line"
+    echo -e "Command: $command"
+    echo -e "Exit code: $err"
+    echo -e "\n${YELLOW}Current step: $installation_step${NC}"
+    
+    # Log the error
+    if [ -n "$LOG_FILE" ]; then
+      echo "[$(date +'%Y-%m-%d %H:%M:%S')] [ERROR] Error $err occurred at line $line: $command" >> "$LOG_FILE"
+    fi
+    
+    # If we've created backups, offer to restore
+    if [ ${#backup_files[@]} -gt 0 ] && [ "$INTERACTIVE" = true ]; then
+      echo -e "\n${YELLOW}Would you like to attempt to restore backup files? (y/n)${NC}"
+      read -p "> " restore_choice
+      
+      if [[ "$restore_choice" =~ ^[Yy]$ ]]; then
+        echo -e "\n${BLUE}Restoring backup files...${NC}"
+        for backup in "${backup_files[@]}"; do
+          original="${backup%.bak.*}"
+          if [ -f "$backup" ]; then
+            cp "$backup" "$original" && echo "Restored: $original" && restored_files+=("$original")
+          fi
+        done
+        echo -e "\n${GREEN}Restore complete for ${#restored_files[@]} files.${NC}"
+      fi
+    fi
+  fi
+  
+  # Always perform cleanup
+  cleanup
+}
+
+# Trap error handler on ERR signal (bash-specific feature)
+trap 'error_handler ${LINENO}' ERR
+
+# Signal handler for graceful termination on user interruptions
+handle_signal() {
+  log "WARNING" "Received termination signal. Cleaning up and exiting..."
+  echo -e "\n${RED}${BOLD}Script interrupted at step: $installation_step${NC}"
+  echo -e "${RED}${BOLD}Cleaning up...${NC}"
+  cleanup
+  exit 1
+}
+
+# Trap interruption signals
+trap handle_signal INT TERM
+
+# Check if script is executable
+check_executable() {
+  if [ ! -x "$0" ]; then
+    echo "Warning: Script is not executable. Running anyway, but for future use:"
+    echo "Run: chmod +x $0"
+  fi
+}
 
 # Script version
-VERSION="1.0.0"
+VERSION="1.9.0"
 
 # Default values
 INTERACTIVE=true
@@ -38,6 +128,11 @@ CONFIGURE_VIM=true
 USE_DIALOG=true  # By default, use dialog TUI if available
 DIALOG_AVAILABLE=false  # Will be set to true if dialog is available/installed
 LOG_FILE="/tmp/servercozy-$(date +%Y%m%d%H%M%S).log"
+USER_INSTALL_ONLY=false # Default to system-wide installation
+SUDO_CMD="" # Command to use for privileged operations (sudo, doas, or empty for root)
+SUDO_AVAILABLE=false # Whether sudo is available
+DOAS_AVAILABLE=false # Whether doas is available (for BSD systems)
+SKIP_UPDATE_CHECK=false # Whether to skip checking for script updates
 # Array to store selected packages
 declare -a SELECTED_PACKAGES
 
@@ -96,6 +191,7 @@ show_help() {
   echo "  --non-interactive    Run with default selections"
   echo "  --essential-only     Install only essential tools"
   echo "  --no-dialog          Force text-based interface (don't use dialog TUI)"
+  echo "  --user-only          Skip system-wide installations, use user directory only"
   echo "  --help               Show this help message"
   echo
   echo -e "${YELLOW}${BOLD}Examples:${NC}"
@@ -125,10 +221,105 @@ log() {
   echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $message" >> "$LOG_FILE"
 }
 
-# Function to detect operating system
+# Improved command existence checking with multiple methods
+command_exists() {
+  local cmd="$1"
+  
+  # Try multiple methods to check for command existence
+  if command -v "$cmd" &>/dev/null; then
+    return 0
+  elif type "$cmd" &>/dev/null; then
+    return 0
+  elif which "$cmd" &>/dev/null; then
+    return 0
+  elif hash "$cmd" 2>/dev/null; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Function to create and check a lock file to prevent multiple script instances
+check_lock() {
+  local lock_file="/tmp/servercozy.lock"
+  
+  # Check if lock file exists and process still running
+  if [ -f "$lock_file" ]; then
+    local pid=$(cat "$lock_file" 2>/dev/null)
+    
+    # Check if pid is a number and process exists
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+      log "ERROR" "Another instance of ServerCozy is already running (PID: $pid)"
+      echo -e "${RED}${BOLD}Error:${NC} Another instance of ServerCozy is already running."
+      echo "If you're sure no other instance is running, delete the lock file:"
+      echo "rm $lock_file"
+      exit 1
+    else
+      log "WARNING" "Stale lock file found, removing"
+    fi
+  fi
+  
+  # Create lock file with current PID
+  echo $$ > "$lock_file"
+  
+  # Remove lock file on exit
+  trap "rm -f '$lock_file'; exit" EXIT HUP INT TERM
+}
+
+# Create temporary directory with proper error handling and cleanup
+create_temp_dir() {
+  local prefix="${1:-servercozy}"
+  local temp_dir
+  
+  temp_dir=$(mktemp -d "/tmp/${prefix}.XXXXXX" 2>/dev/null) || {
+    log "ERROR" "Failed to create temporary directory"
+    echo -e "${RED}${BOLD}Error:${NC} Failed to create temporary directory"
+    exit 1
+  }
+  
+  echo "$temp_dir"
+}
+
+# Function to detect operating system with extended support
 detect_os() {
   log "INFO" "Detecting operating system..."
   
+  # macOS detection
+  if [ "$(uname)" = "Darwin" ]; then
+    OS_TYPE="macos"
+    if command_exists brew; then
+      PKG_MANAGER="brew"
+      OS_NAME="macOS (Homebrew)"
+      OS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo 'Unknown')"
+    else
+      log "WARNING" "Homebrew not found. Some features may not work properly."
+      PKG_MANAGER="none"
+      OS_NAME="macOS"
+      OS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo 'Unknown')"
+    fi
+    log "INFO" "Detected ${OS_NAME} ${OS_VERSION} (using ${PKG_MANAGER})"
+    return
+  fi
+  
+  # WSL detection
+  if [ -f /proc/version ] && grep -q "Microsoft" /proc/version; then
+    IS_WSL=true
+    log "INFO" "Detected Windows Subsystem for Linux"
+  else
+    IS_WSL=false
+  fi
+  
+  # BSD variants
+  if [ "$(uname)" = "FreeBSD" ] || [ "$(uname)" = "OpenBSD" ] || [ "$(uname)" = "NetBSD" ]; then
+    OS_TYPE="bsd"
+    OS_NAME="$(uname)"
+    OS_VERSION="$(uname -r)"
+    PKG_MANAGER="pkg"
+    log "INFO" "Detected ${OS_NAME} ${OS_VERSION} (using ${PKG_MANAGER})"
+    return
+  fi
+  
+  # Linux detection
   if [ -f /etc/os-release ]; then
     . /etc/os-release
     OS_NAME=$NAME
@@ -140,7 +331,7 @@ detect_os() {
       log "INFO" "Detected ${OS_NAME} ${OS_VERSION} (using ${PKG_MANAGER})"
     elif [[ $OS_NAME == *"CentOS"* ]] || [[ $OS_NAME == *"Red Hat"* ]] || [[ $OS_NAME == *"Fedora"* ]]; then
       OS_TYPE="redhat"
-      if command -v dnf &>/dev/null; then
+      if command_exists dnf; then
         PKG_MANAGER="dnf"
       else
         PKG_MANAGER="yum"
@@ -150,14 +341,135 @@ detect_os() {
       OS_TYPE="alpine"
       PKG_MANAGER="apk"
       log "INFO" "Detected ${OS_NAME} ${OS_VERSION} (using ${PKG_MANAGER})"
+    elif [[ $OS_NAME == *"Arch"* ]] || [[ $OS_NAME == *"Manjaro"* ]]; then
+      OS_TYPE="arch"
+      PKG_MANAGER="pacman"
+      log "INFO" "Detected ${OS_NAME} ${OS_VERSION} (using ${PKG_MANAGER})"
     else
-      log "WARNING" "Unsupported distribution: ${OS_NAME}. Will try using apt."
+      log "WARNING" "Unsupported distribution: ${OS_NAME}. Will try to detect package manager."
       OS_TYPE="unknown"
-      PKG_MANAGER="apt"
+      
+      # Try to detect package manager
+      if command_exists apt; then
+        PKG_MANAGER="apt"
+      elif command_exists dnf; then
+        PKG_MANAGER="dnf"
+      elif command_exists yum; then
+        PKG_MANAGER="yum"
+      elif command_exists apk; then
+        PKG_MANAGER="apk"
+      elif command_exists pacman; then
+        PKG_MANAGER="pacman"
+      else
+        log "WARNING" "Could not detect package manager. Some features may not work."
+        PKG_MANAGER="unknown"
+      fi
+      
+      log "INFO" "Using ${PKG_MANAGER} for package management."
     fi
+  elif [ -f /etc/lsb-release ]; then
+    # Alternative method for Ubuntu/Debian
+    . /etc/lsb-release
+    OS_NAME="$DISTRIB_ID"
+    OS_VERSION="$DISTRIB_RELEASE"
+    OS_TYPE="debian"
+    PKG_MANAGER="apt"
+    log "INFO" "Detected ${OS_NAME} ${OS_VERSION} using lsb-release (using ${PKG_MANAGER})"
   else
-    log "ERROR" "Could not detect operating system!"
-    exit 1
+    # Very basic fallback detection
+    if command_exists apt; then
+      OS_TYPE="debian"
+      PKG_MANAGER="apt"
+    elif command_exists dnf; then
+      OS_TYPE="redhat"
+      PKG_MANAGER="dnf"
+    elif command_exists yum; then
+      OS_TYPE="redhat"
+      PKG_MANAGER="yum"
+    elif command_exists apk; then
+      OS_TYPE="alpine"
+      PKG_MANAGER="apk"
+    elif command_exists pacman; then
+      OS_TYPE="arch"
+      PKG_MANAGER="pacman"
+    else
+      log "WARNING" "Could not detect operating system package manager! Some features may not work."
+      OS_TYPE="unknown"
+      PKG_MANAGER="unknown"
+    fi
+    OS_NAME="$(uname -s)"
+    OS_VERSION="$(uname -r)"
+    log "INFO" "Basic detection: ${OS_NAME} ${OS_VERSION} (using ${PKG_MANAGER})"
+  fi
+}
+
+# Function to check network connectivity with fallbacks for different systems
+check_connectivity() {
+  log "INFO" "Checking internet connectivity..."
+  
+  # Try multiple domains to ensure reliable checking
+  local check_domains=("google.com" "github.com" "cloudflare.com")
+  local connected=false
+  
+  # First try: ping (may be restricted on some systems)
+  for domain in "${check_domains[@]}"; do
+    # Check for ping command and adjust flags based on OS
+    if command_exists ping; then
+      if [ "$(uname)" = "Darwin" ] || [ "$(uname)" = "FreeBSD" ]; then
+        # macOS and FreeBSD syntax
+        if ping -c 1 -t 2 "$domain" &>/dev/null; then
+          connected=true
+          break
+        fi
+      else
+        # Linux syntax
+        if ping -c 1 -W 2 "$domain" &>/dev/null; then
+          connected=true
+          break
+        fi
+      fi
+    fi
+  done
+  
+  # Second try: Use curl if ping failed or isn't available
+  if [ "$connected" = false ] && command_exists curl; then
+    for domain in "${check_domains[@]}"; do
+      if curl --silent --head --max-time 2 "https://$domain" &>/dev/null; then
+        connected=true
+        break
+      fi
+    done
+  fi
+  
+  # Third try: Use wget if curl failed or isn't available
+  if [ "$connected" = false ] && command_exists wget; then
+    for domain in "${check_domains[@]}"; do
+      if wget --spider --quiet --timeout=2 "https://$domain" &>/dev/null; then
+        connected=true
+        break
+      fi
+    done
+  fi
+  
+  # Fourth try: Use nc/netcat if available (common on Unix systems)
+  if [ "$connected" = false ] && (command_exists nc || command_exists netcat); then
+    local nc_cmd="nc"
+    command_exists netcat && nc_cmd="netcat"
+    
+    for domain in "${check_domains[@]}"; do
+      if $nc_cmd -z -w 2 "$domain" 443 &>/dev/null; then
+        connected=true
+        break
+      fi
+    done
+  fi
+  
+  if [ "$connected" = false ]; then
+    log "WARNING" "No internet connectivity detected. Some features may not work."
+    return 1
+  else
+    log "SUCCESS" "Internet connectivity confirmed."
+    return 0
   fi
 }
 
@@ -165,19 +477,58 @@ detect_os() {
 update_package_repos() {
   log "INFO" "Updating package repositories..."
   
+  # Check connectivity first
+  check_connectivity || log "WARNING" "Proceeding with limited connectivity. Repository updates may fail."
+  
+  # Skip if user-only installation mode and not homebrew
+  if [ "$USER_INSTALL_ONLY" = true ] && [ "$PKG_MANAGER" != "brew" ]; then
+    log "WARNING" "Skipping system repository updates in user-only mode."
+    return 0
+  fi
+  
   case $PKG_MANAGER in
     apt)
-      sudo apt update -y
+      run_with_privileges apt update -y || log "WARNING" "Failed to update apt repositories"
       ;;
     dnf|yum)
-      sudo $PKG_MANAGER check-update -y
+      run_with_privileges $PKG_MANAGER check-update -y || true  # check-update returns 100 when updates available
       ;;
     apk)
-      sudo apk update
+      run_with_privileges apk update || log "WARNING" "Failed to update apk repositories"
+      ;;
+    brew)
+      brew update || log "WARNING" "Failed to update Homebrew"
+      ;;
+    pacman)
+      run_with_privileges pacman -Sy || log "WARNING" "Failed to update pacman repositories"
+      ;;
+    pkg)
+      run_with_privileges pkg update || log "WARNING" "Failed to update pkg repositories"
+      ;;
+    none|unknown)
+      log "WARNING" "No suitable package manager found. Skipping repository update."
+      ;;
+    *)
+      log "WARNING" "Unknown package manager ($PKG_MANAGER). Skipping repository update."
       ;;
   esac
   
   log "SUCCESS" "Package repositories updated."
+}
+# Function to safely backup a configuration file before modifying it
+backup_config_file() {
+  local file="$1"
+  
+  if [ -f "$file" ]; then
+    local backup="${file}.bak.$(date +%Y%m%d%H%M%S)"
+    log "INFO" "Creating backup of $file to $backup"
+    cp "$file" "$backup"
+    backup_files+=("$backup")
+    return 0
+  else
+    log "INFO" "File $file doesn't exist, no backup needed"
+    return 1
+  fi
 }
 
 # Function to check if a package is installed
@@ -194,10 +545,105 @@ is_installed() {
     apk)
       apk info -e "$package_name" &>/dev/null
       ;;
+    brew)
+      brew list "$package_name" &>/dev/null
+      ;;
+    pacman)
+      pacman -Q "$package_name" &>/dev/null
+      ;;
+    pkg)
+      pkg info -e "$package_name" &>/dev/null
+      ;;
     *)
       command -v "$package_name" &>/dev/null
       ;;
   esac
+}
+
+# Function to detect system architecture and set appropriate variables
+detect_arch() {
+  log "INFO" "Detecting system architecture..."
+  
+  local arch=$(uname -m)
+  ARCH="$arch"
+  
+  case "$arch" in
+    x86_64|amd64)
+      ARCH_TYPE="amd64"
+      log "INFO" "Detected x86_64/amd64 architecture"
+      ;;
+    aarch64|arm64)
+      ARCH_TYPE="arm64"
+      log "INFO" "Detected ARM64 architecture"
+      ;;
+    armv7*|armhf)
+      ARCH_TYPE="armhf"
+      log "INFO" "Detected ARM (32-bit) architecture"
+      ;;
+    i386|i686)
+      ARCH_TYPE="i386"
+      log "INFO" "Detected i386/i686 architecture"
+      ;;
+    *)
+      ARCH_TYPE="unknown"
+      log "WARNING" "Unknown architecture: $arch. Some features may not work correctly."
+      ;;
+  esac
+  
+  return 0
+}
+
+# Create a flexible download function that uses available tools with retry
+download_file() {
+  local url="$1"
+  local output_file="$2"
+  local max_retries="${3:-3}"  # Default to 3 retries if not specified
+  local retry_delay="${4:-5}"  # Default to 5 seconds between retries
+  local success=false
+  local attempt=1
+  
+  log "INFO" "Downloading $url to $output_file"
+  
+  while [ "$attempt" -le "$max_retries" ] && [ "$success" = false ]; do
+    if [ "$attempt" -gt 1 ]; then
+      log "INFO" "Retry attempt $attempt/$max_retries after $retry_delay seconds..."
+      sleep "$retry_delay"
+    fi
+    
+    # Try curl first
+    if command_exists curl; then
+      log "INFO" "Using curl..."
+      if curl -fsSL --connect-timeout 15 --retry 3 "$url" -o "$output_file"; then
+        success=true
+        continue
+      else
+        log "WARNING" "curl download failed"
+      fi
+    fi
+    
+    # If curl failed or doesn't exist, try wget
+    if [ "$success" = false ] && command_exists wget; then
+      log "INFO" "Using wget..."
+      if wget --timeout=15 --tries=3 -q "$url" -O "$output_file"; then
+        success=true
+        continue
+      else
+        log "WARNING" "wget download failed"
+      fi
+    fi
+    
+    # Increment attempt counter
+    attempt=$((attempt+1))
+  done
+  
+  # Return success/failure
+  if [ "$success" = true ]; then
+    log "SUCCESS" "File downloaded successfully"
+    return 0
+  else
+    log "ERROR" "Failed to download file after $max_retries attempts"
+    return 1
+  fi
 }
 
 # Function to install a package
@@ -221,15 +667,68 @@ install_package() {
   
   log "INFO" "Installing $package_name ($description)..."
   
+  # Try user-level installation in user-only mode for certain packages
+  if [ "$USER_INSTALL_ONLY" = true ] && [ "$PKG_MANAGER" != "brew" ]; then
+    log "INFO" "Attempting user-level installation for $package_name..."
+    
+    # Check if we can do a local install with npm, pip, or cargo
+    if [[ "$package_name" == "tldr" ]] && command_exists npm; then
+      npm install -g tldr || log "ERROR" "Failed to install $package_name with npm"
+    elif [[ "$package_name" == "bat" || "$package_name" == "fd-find" || "$package_name" == "ripgrep" || "$package_name" == "eza" ]] && command_exists cargo; then
+      cargo install "$package_name" || log "ERROR" "Failed to install $package_name with cargo"
+    elif command_exists pip || command_exists pip3; then
+      local pip_cmd="pip"
+      command_exists pip3 && pip_cmd="pip3"
+      $pip_cmd install --user "$package_name" || log "ERROR" "Failed to install $package_name with pip"
+    else
+      log "WARNING" "No suitable user-level installation method found for $package_name."
+      return 1
+    fi
+    
+    # Check if we succeeded
+    if command_exists "$package_name"; then
+      log "SUCCESS" "$package_name installed successfully via user-level installation."
+      return 0
+    else
+      log "WARNING" "User-level installation of $package_name failed. Skipping."
+      return 1
+    fi
+  fi
+  
+  # Proceed with system-level installation
   case $PKG_MANAGER in
     apt)
-      sudo apt install -y "$package_name"
+      run_with_privileges apt install -y "$package_name" || log "ERROR" "Failed to install $package_name with apt"
       ;;
     dnf|yum)
-      sudo $PKG_MANAGER install -y "$package_name"
+      run_with_privileges $PKG_MANAGER install -y "$package_name" || log "ERROR" "Failed to install $package_name with $PKG_MANAGER"
       ;;
     apk)
-      sudo apk add "$package_name"
+      run_with_privileges apk add "$package_name" || log "ERROR" "Failed to install $package_name with apk"
+      ;;
+    brew)
+      brew install "$package_name" || log "ERROR" "Failed to install $package_name with Homebrew"
+      ;;
+    pacman)
+      run_with_privileges pacman -S --noconfirm "$package_name" || log "ERROR" "Failed to install $package_name with pacman"
+      ;;
+    pkg)
+      run_with_privileges pkg install -y "$package_name" || log "ERROR" "Failed to install $package_name with pkg"
+      ;;
+    none|unknown)
+      log "WARNING" "No package manager available. Skipping installation of $package_name."
+      return 1
+      ;;
+    *)
+      log "WARNING" "Unknown package manager: $PKG_MANAGER. Trying direct command lookup."
+      # Just check if the command becomes available somehow (e.g., manual install)
+      if command_exists "$package_name"; then
+        log "SUCCESS" "$package_name is already available as a command."
+        return 0
+      else
+        log "ERROR" "Unable to install $package_name with unknown package manager."
+        return 1
+      fi
       ;;
   esac
   
@@ -513,7 +1012,7 @@ handle_special_packages() {
     case $OS_TYPE in
       debian)
         # On Debian/Ubuntu the package is fd-find but binary is fdfind
-        if sudo apt install -y fd-find; then
+        if run_with_privileges apt install -y fd-find; then
           if command -v fdfind &>/dev/null; then
             binary_name="fdfind"
             install_success=true
@@ -523,7 +1022,7 @@ handle_special_packages() {
         ;;
       redhat)
         # On Fedora it's fd-find, on newer versions might be just fd
-        if sudo $PKG_MANAGER install -y fd-find 2>/dev/null; then
+        if run_with_privileges $PKG_MANAGER install -y fd-find 2>/dev/null; then
           if command -v fd-find &>/dev/null; then
             binary_name="fd-find"
             install_success=true
@@ -532,7 +1031,7 @@ handle_special_packages() {
             install_success=true
           fi
           log "SUCCESS" "Installed fd-find package successfully."
-        elif sudo $PKG_MANAGER install -y fd 2>/dev/null; then
+        elif run_with_privileges $PKG_MANAGER install -y fd 2>/dev/null; then
           if command -v fd &>/dev/null; then
             binary_name="fd"
             install_success=true
@@ -542,7 +1041,7 @@ handle_special_packages() {
         ;;
       alpine)
         # On Alpine it's simply fd
-        if sudo apk add fd; then
+        if run_with_privileges apk add fd; then
           if command -v fd &>/dev/null; then
             binary_name="fd"
             install_success=true
@@ -552,7 +1051,7 @@ handle_special_packages() {
         ;;
       *)
         # Try both names
-        if sudo $PKG_MANAGER install -y fd-find 2>/dev/null || sudo $PKG_MANAGER install -y fd 2>/dev/null; then
+        if run_with_privileges $PKG_MANAGER install -y fd-find 2>/dev/null || run_with_privileges $PKG_MANAGER install -y fd 2>/dev/null; then
           if command -v fd &>/dev/null; then
             binary_name="fd"
             install_success=true
@@ -626,17 +1125,17 @@ handle_special_packages() {
         log "INFO" "Setting up eza repository for Debian/Ubuntu..."
         
         # Ensure required tools are installed
-        sudo apt update
-        sudo apt install -y gpg curl wget 2>/dev/null
+        run_with_privileges apt update
+        run_with_privileges apt install -y gpg curl wget 2>/dev/null
         
         # Add the eza repository
-        sudo mkdir -p /etc/apt/keyrings
-        wget -qO- https://raw.githubusercontent.com/eza-community/eza/main/deb.asc | sudo gpg --dearmor -o /etc/apt/keyrings/gierens.gpg 2>/dev/null
-        echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" | sudo tee /etc/apt/sources.list.d/gierens.list >/dev/null
-        sudo chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list 2>/dev/null
+        run_with_privileges mkdir -p /etc/apt/keyrings
+        wget -qO- https://raw.githubusercontent.com/eza-community/eza/main/deb.asc | run_with_privileges gpg --dearmor -o /etc/apt/keyrings/gierens.gpg 2>/dev/null
+        echo "deb [signed-by=/etc/apt/keyrings/gierens.gpg] http://deb.gierens.de stable main" | run_with_privileges tee /etc/apt/sources.list.d/gierens.list >/dev/null
+        run_with_privileges chmod 644 /etc/apt/keyrings/gierens.gpg /etc/apt/sources.list.d/gierens.list 2>/dev/null
         
         # Update and install
-        if sudo apt update && sudo apt install -y eza; then
+        if run_with_privileges apt update && run_with_privileges apt install -y eza; then
           log "SUCCESS" "Installed eza from official repository."
           install_success=true
         else
@@ -645,7 +1144,7 @@ handle_special_packages() {
         ;;
       redhat)
         # For Fedora, eza is in the official repositories
-        if sudo $PKG_MANAGER install -y eza 2>/dev/null; then
+        if run_with_privileges $PKG_MANAGER install -y eza 2>/dev/null; then
           log "SUCCESS" "Installed eza from official repository."
           install_success=true
         else
@@ -654,7 +1153,7 @@ handle_special_packages() {
         ;;
       alpine)
         # For Alpine
-        if sudo apk add eza 2>/dev/null; then
+        if run_with_privileges apk add eza 2>/dev/null; then
           log "SUCCESS" "Installed eza from Alpine repository."
           install_success=true
         else
@@ -695,7 +1194,8 @@ handle_special_packages() {
         # Try to download and install the pre-built binary
         if curl -L -o eza.tar.gz "https://github.com/eza-community/eza/releases/latest/download/eza_${target}.tar.gz" 2>/dev/null; then
           tar -xzf eza.tar.gz
-          sudo install -m755 eza /usr/local/bin/eza 2>/dev/null
+          run_with_privileges install -m755 eza /usr/local/bin/eza 2>/dev/null ||
+          mkdir -p "$HOME/.local/bin" && install -m755 eza "$HOME/.local/bin/eza"
           
           if command -v eza &>/dev/null; then
             log "SUCCESS" "Installed eza from pre-built binary."
@@ -727,7 +1227,17 @@ handle_special_packages() {
     # If installation succeeded, create exa symlink for backward compatibility
     if [ "$install_success" = true ]; then
       log "INFO" "Creating 'exa' symlink for backward compatibility..."
-      sudo ln -sf "$(which eza)" /usr/local/bin/exa 2>/dev/null
+      if [ "$USER_INSTALL_ONLY" = true ]; then
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$(which eza)" "$HOME/.local/bin/exa" 2>/dev/null
+        log "SUCCESS" "Created exa symlink in user's ~/.local/bin directory"
+      else
+        run_with_privileges ln -sf "$(which eza)" /usr/local/bin/exa 2>/dev/null || {
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$(which eza)" "$HOME/.local/bin/exa" 2>/dev/null
+          log "SUCCESS" "Created exa symlink in user's ~/.local/bin directory"
+        }
+      fi
     else
       log "WARNING" "Could not install eza. Standard ls will be used instead."
     fi
@@ -743,7 +1253,7 @@ handle_special_packages() {
           log "INFO" "bat is installed as batcat, creating alias..."
           echo "alias bat='batcat'" >> $HOME/.bash_aliases
         else
-          sudo apt install -y bat || sudo apt install -y batcat
+          run_with_privileges apt install -y bat || run_with_privileges apt install -y batcat
         fi
         ;;
       *)
@@ -769,8 +1279,30 @@ handle_special_packages() {
       unzip master.zip
       
       # Install pfetch
-      log "INFO" "Installing pfetch to /usr/local/bin/..."
-      sudo install pfetch-master/pfetch /usr/local/bin/
+      log "INFO" "Installing pfetch..."
+      if [ "$USER_INSTALL_ONLY" = true ]; then
+        # User-only installation to ~/.local/bin
+        mkdir -p "$HOME/.local/bin"
+        install -m755 pfetch-master/pfetch "$HOME/.local/bin/pfetch"
+        # Make sure ~/.local/bin is in PATH
+        if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+          log "INFO" "Adding ~/.local/bin to PATH in shell configuration..."
+          if [ -n "$BASH_VERSION" ]; then
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+          elif [ -n "$ZSH_VERSION" ]; then
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+          else
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+          fi
+          # Use the new PATH for the current session
+          export PATH="$HOME/.local/bin:$PATH"
+        fi
+        log "INFO" "Installed pfetch to ~/.local/bin/"
+      else
+        # System-wide installation
+        log "INFO" "Installing pfetch to /usr/local/bin/..."
+        run_with_privileges install -m755 pfetch-master/pfetch /usr/local/bin/
+      fi
       
       # Clean up
       cd - > /dev/null
@@ -861,13 +1393,52 @@ configure_prompt() {
     shell_config="$HOME/.bashrc"
   fi
   
-  # Create a backup
-  cp "$shell_config" "${shell_config}.bak.$(date +%Y%m%d%H%M%S)"
+  # Create a backup using our backup function
+  backup_config_file "$shell_config"
   
   # Add custom prompt configuration
-  cat >> "$shell_config" << 'EOF'
+  if [ -n "$ZSH_VERSION" ]; then
+    # ZSH specific prompt configuration
+    cat >> "$shell_config" << 'EOF'
 
-# Custom prompt configuration by ServerCozy
+# Custom prompt configuration by ServerCozy for ZSH
+autoload -Uz colors && colors
+autoload -Uz vcs_info
+precmd() {
+  vcs_info
+  if [ $? -eq 0 ]; then
+    PROMPT_SYMBOL="%{$fg[green]%}❱%{$reset_color%}"
+  else
+    PROMPT_SYMBOL="%{$fg[red]%}❱%{$reset_color%}"
+  fi
+}
+
+# Enable git branch detection
+zstyle ':vcs_info:git:*' formats ' (%{$fg[yellow]%}%b%{$reset_color%})'
+
+# Shorten path if it's too long
+function collapse_pwd {
+  local pwd_length=30
+  local pwd_symbol="…"
+  local pwd_path="${PWD/#$HOME/~}"
+  
+  if [ ${#pwd_path} -gt $pwd_length ]; then
+    local offset=$(( ${#pwd_path} - $pwd_length ))
+    echo "${pwd_symbol}${pwd_path:$offset:$pwd_length}"
+  else
+    echo "$pwd_path"
+  fi
+}
+
+# Set the prompt
+setopt PROMPT_SUBST
+PROMPT='%B%n%b@%B%m%b %{$fg[cyan]%}$(collapse_pwd)%{$reset_color%}${vcs_info_msg_0_} ${PROMPT_SYMBOL} '
+EOF
+  else
+    # Bash prompt configuration
+    cat >> "$shell_config" << 'EOF'
+
+# Custom prompt configuration by ServerCozy for Bash
 prompt_command() {
   local EXIT="$?"
   local BLUE="\[\033[38;5;39m\]"
@@ -981,8 +1552,32 @@ fi
 # System information
 if command -v pfetch &>/dev/null; then
   alias sysinfo='pfetch'
+elif command -v neofetch &>/dev/null; then
+  alias sysinfo='neofetch'
 else
-  alias sysinfo='echo -e "\n$(hostname) $(date)" && cat /etc/*release && echo -e "\nKernel: $(uname -r)" && echo -e "Memory: $(free -h | grep Mem | awk "{print \$3\"/\"\$2}")" && echo -e "Disk: $(df -h / | grep / | awk "{print \$3\"/\"\$2}")"'
+  # OS-specific fallback commands for system info
+  case "$(uname)" in
+    Darwin)
+      # macOS specific commands
+      alias sysinfo='echo -e "\n$(hostname) $(date)" && echo -e "macOS $(sw_vers -productVersion)" && echo -e "\nKernel: $(uname -r)" && echo -e "Memory: $(vm_stat | grep "Pages active" | awk "{ print \$3 }" | sed "s/\.//")" && echo -e "Disk: $(df -h / | grep / | awk "{print \$4\"/\"\$2}")"'
+      ;;
+    Linux)
+      # Check if /etc/*release exists
+      if [ -f /etc/os-release ]; then
+        alias sysinfo='echo -e "\n$(hostname) $(date)" && cat /etc/os-release | grep -E "^(NAME|VERSION)=" && echo -e "\nKernel: $(uname -r)" && echo -e "Memory: $(free -h | grep Mem | awk "{print \$3\"/\"\$2}")" && echo -e "Disk: $(df -h / | grep / | awk "{print \$3\"/\"\$2}")"'
+      else
+        alias sysinfo='echo -e "\n$(hostname) $(date)" && echo -e "Linux $(uname -r)" && echo -e "Memory: $(free -h | grep Mem | awk "{print \$3\"/\"\$2}")" && echo -e "Disk: $(df -h / | grep / | awk "{print \$3\"/\"\$2}")"'
+      fi
+      ;;
+    FreeBSD|OpenBSD|NetBSD)
+      # BSD variants
+      alias sysinfo='echo -e "\n$(hostname) $(date)" && echo -e "$(uname -s) $(uname -r)" && echo -e "\nKernel: $(uname -r)" && echo -e "Disk: $(df -h / | grep / | awk "{print \$3\"/\"\$2}")"'
+      ;;
+    *)
+      # Generic fallback
+      alias sysinfo='echo -e "\n$(hostname) $(date)" && echo -e "$(uname -s) $(uname -r)" && echo -e "\nKernel: $(uname -r)"'
+      ;;
+  esac
 fi
 
 # Git repositories status
@@ -1021,6 +1616,9 @@ configure_vim() {
   fi
   
   log "INFO" "Configuring vim..."
+  
+  # Backup existing .vimrc if it exists
+  backup_config_file "$HOME/.vimrc"
   
   # Create .vimrc file
   cat > "$HOME/.vimrc" << 'EOF'
@@ -1077,7 +1675,17 @@ EOF
 
 # Function to show summary of installed tools
 show_summary() {
-  echo -e "\n${BOLD}${GREEN}=== ServerCozy Setup Complete ===${NC}"
+  # Calculate elapsed time if start_time is set
+  local elapsed_time=""
+  if [ -n "$start_time" ]; then
+    local end_time=$(date +%s)
+    local total_seconds=$((end_time - start_time))
+    local minutes=$((total_seconds / 60))
+    local seconds=$((total_seconds % 60))
+    elapsed_time=" in ${minutes}m ${seconds}s"
+  fi
+
+  echo -e "\n${BOLD}${GREEN}=== ServerCozy Setup Complete${elapsed_time} ===${NC}"
   echo -e "${BOLD}The following improvements have been made:${NC}"
   
   # Check installed packages
@@ -1153,13 +1761,22 @@ check_dialog() {
     
     case $PKG_MANAGER in
       apt)
-        sudo apt install -y dialog
+        run_with_privileges apt install -y dialog
         ;;
       dnf|yum)
-        sudo $PKG_MANAGER install -y dialog
+        run_with_privileges $PKG_MANAGER install -y dialog
         ;;
       apk)
-        sudo apk add dialog
+        run_with_privileges apk add dialog
+        ;;
+      brew)
+        brew install dialog
+        ;;
+      pacman)
+        run_with_privileges pacman -S --noconfirm dialog
+        ;;
+      pkg)
+        run_with_privileges pkg install -y dialog
         ;;
     esac
     
@@ -1176,29 +1793,165 @@ check_dialog() {
   fi
 }
 
-# Function to check sudo access
+# Function to check privileges and set up the appropriate command
 check_sudo() {
-  log "INFO" "Checking sudo access..."
+  log "INFO" "Checking for privileged command access..."
   
-  if ! command -v sudo &>/dev/null; then
-    log "ERROR" "sudo command not found. Please install sudo package."
+  # Initialize empty SUDO_CMD as a fallback
+  SUDO_CMD=""
+  SUDO_AVAILABLE=false
+  DOAS_AVAILABLE=false
+  USER_INSTALL_ONLY=false
+
+  # Check for sudo availability
+  if command_exists sudo; then
+    # Test sudo access
+    if sudo -n true 2>/dev/null; then
+      log "SUCCESS" "sudo access confirmed (passwordless)."
+      SUDO_CMD="sudo"
+      SUDO_AVAILABLE=true
+      return 0
+    elif sudo true; then
+      log "SUCCESS" "sudo access confirmed with password."
+      SUDO_CMD="sudo"
+      SUDO_AVAILABLE=true
+      return 0
+    else
+      log "WARNING" "sudo command found but access failed."
+    fi
+  else
+    log "WARNING" "sudo command not found."
+  fi
+
+  # If sudo failed or not available, try doas (common on BSD systems)
+  if command_exists doas; then
+    log "INFO" "Found doas, trying to use it instead of sudo..."
+    if doas true 2>/dev/null; then
+      log "SUCCESS" "doas access confirmed."
+      SUDO_CMD="doas"
+      DOAS_AVAILABLE=true
+      return 0
+    else
+      log "WARNING" "doas command found but access failed."
+    fi
+  fi
+
+  # If neither sudo nor doas is available, check if user is root
+  if [ "$(id -u)" -eq 0 ]; then
+    log "SUCCESS" "Running as root user, no sudo needed."
+    SUDO_CMD=""
+    return 0
+  fi
+
+  # Ask if user wants to continue without privileged access
+  echo
+  echo -e "${YELLOW}${BOLD}No privileged access method available${NC}"
+  echo -e "Without sudo or doas, some features may not work correctly."
+  echo -e "You can continue with user-only installation, but some tools may not be installed system-wide."
+  echo -e "1. ${GREEN}Continue${NC} - Try user-only installation where possible"
+  echo -e "2. ${RED}Abort${NC} - Exit and install sudo or gain proper permissions"
+  echo
+  read -p "Enter choice [1/2]: " privilege_choice
+  
+  if [[ "$privilege_choice" == "1" ]]; then
+    log "WARNING" "Continuing with user-only installation mode."
+    USER_INSTALL_ONLY=true
+    return 0
+  else
+    log "ERROR" "Exiting due to lack of privileged access."
     exit 1
   fi
+}
+
+# Function to execute a command with appropriate privileges
+run_with_privileges() {
+  local cmd="$@"
   
-  # Test sudo access
-  if ! sudo -n true 2>/dev/null; then
-    log "WARNING" "You may be asked for your password to run commands with sudo."
-    if ! sudo true; then
-      log "ERROR" "Failed to get sudo access. Exiting."
-      exit 1
+  if [ "$USER_INSTALL_ONLY" = true ]; then
+    log "WARNING" "Skipping privileged command: $cmd"
+    return 1
+  elif [ -n "$SUDO_CMD" ]; then
+    $SUDO_CMD $cmd
+    return $?
+  elif [ "$(id -u)" -eq 0 ]; then
+    $cmd
+    return $?
+  else
+    log "ERROR" "Cannot run privileged command: $cmd"
+    return 1
+  fi
+}
+
+# Function to update installation progress
+update_progress() {
+  installation_step="$1"
+  log "INFO" "Starting step: $installation_step"
+}
+
+# Function to handle macOS-specific setup
+setup_macos() {
+  if [ "$OS_TYPE" != "macos" ]; then
+    return 0
+  fi
+  
+  log "INFO" "Performing macOS-specific setup..."
+  
+  # Check if Homebrew is installed
+  if ! command_exists brew; then
+    log "INFO" "Homebrew not found. Recommending installation..."
+    echo -e "\n${YELLOW}${BOLD}Homebrew is not installed${NC}"
+    echo -e "Homebrew is highly recommended for installing packages on macOS."
+    echo -e "Would you like to install Homebrew? (y/n)"
+    read -p "> " install_homebrew
+    
+    if [[ "$install_homebrew" =~ ^[Yy]$ ]]; then
+      log "INFO" "Installing Homebrew..."
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      
+      # Check installation
+      if command_exists brew; then
+        log "SUCCESS" "Homebrew installed successfully."
+        PKG_MANAGER="brew"
+      else
+        log "ERROR" "Failed to install Homebrew. Some features may not work."
+        PKG_MANAGER="none"
+      fi
+    else
+      log "WARNING" "Skipping Homebrew installation. Some features may not work."
+      PKG_MANAGER="none"
     fi
   fi
   
-  log "SUCCESS" "Sudo access confirmed."
+  # macOS specific tool adjustments
+  if [[ "$PKG_MANAGER" == "brew" ]]; then
+    # Check for missing but useful macOS tools
+    if ! command_exists coreutils; then
+      echo -e "\n${YELLOW}GNU coreutils not detected. These provide many standard Linux utilities.${NC}"
+      echo -e "Would you like to install GNU coreutils? (y/n)"
+      read -p "> " install_coreutils
+      
+      if [[ "$install_coreutils" =~ ^[Yy]$ ]]; then
+        brew install coreutils
+        log "SUCCESS" "GNU coreutils installed"
+      fi
+    fi
+  fi
+  
+  return 0
 }
 
 # Main function
 main() {
+  # Store start time for elapsed time calculation
+  local start_time=$(date +%s)
+  
+  # Check lock file to prevent multiple instances
+  check_lock
+  
+  # Check if script is executable
+  update_progress "Checking script permissions"
+  check_executable
+  
   # Display banner
   echo -e "${BLUE}${BOLD}===========================================================${NC}"
   echo -e "${BLUE}${BOLD}           ServerCozy v${VERSION}            ${NC}"
@@ -1208,38 +1961,144 @@ main() {
   # Set up logging
   echo "=== ServerCozy Log $(date) ===" > "$LOG_FILE"
   
-  # Check sudo access
+  # Check for privileges (sudo/doas)
+  update_progress "Checking for privileged access"
   check_sudo
-  
   # Detect operating system
+  update_progress "Detecting operating system"
   detect_os
   
+  # Detect architecture
+  update_progress "Detecting system architecture"
+  detect_arch
+  
+  # Check for updates to the script
+  update_progress "Checking for script updates"
+  check_for_updates
+  
+  # Handle macOS specific setup if needed
+  if [ "$OS_TYPE" = "macos" ]; then
+    update_progress "Setting up macOS environment"
+    setup_macos
+  fi
+  
+  # Check connectivity
+  update_progress "Checking internet connectivity"
+  check_connectivity
+  
   # Update package repositories
+  update_progress "Updating package repositories"
   update_package_repos
   
   # Check for dialog availability
+  update_progress "Checking for dialog utility"
   check_dialog
   
   # Select and install packages
+  update_progress "Selecting and installing packages"
   select_packages
   
   # Handle special package cases
+  update_progress "Handling special package cases"
   handle_special_packages
   
-  # Install Nerd Font
-  install_nerd_font
+  # Install Nerd Font (skip in user-only mode)
+  if [ "$USER_INSTALL_ONLY" != "true" ]; then
+    update_progress "Installing Nerd Font"
+    install_nerd_font
+  else
+    log "INFO" "Skipping Nerd Font installation in user-only mode."
+  fi
   
   # Configure shell prompt
+  update_progress "Configuring shell prompt"
   configure_prompt
   
   # Configure aliases
+  update_progress "Configuring aliases"
   configure_aliases
   
   # Configure vim
+  update_progress "Configuring vim"
   configure_vim
   
   # Show summary
+  update_progress "Displaying installation summary"
   show_summary
+  
+  log "SUCCESS" "Installation completed successfully!"
+}
+
+# Function to check for updates to the script
+check_for_updates() {
+  if [ "$SKIP_UPDATE_CHECK" = true ]; then
+    log "INFO" "Update check skipped due to command line flag"
+    return 0
+  fi
+  
+  log "INFO" "Checking for script updates..."
+  
+  # Define remote repo URL
+  local repo_url="https://raw.githubusercontent.com/sudharsanananth/servercozy/main/server-cozy.sh"
+  local temp_script="/tmp/server-cozy-latest.sh"
+  
+  # Download the latest version
+  if ! download_file "$repo_url" "$temp_script" 2 3; then
+    log "WARNING" "Failed to check for updates. Continuing with current version."
+    return 1
+  fi
+  
+  # Extract version from downloaded script
+  local remote_version=$(grep -o '^VERSION="[0-9\.]*"' "$temp_script" | cut -d'"' -f2)
+  
+  if [ -z "$remote_version" ]; then
+    log "WARNING" "Could not determine remote version. Continuing with current version."
+    rm -f "$temp_script"
+    return 1
+  fi
+  
+  log "INFO" "Current version: $VERSION, Latest version: $remote_version"
+  
+  # Compare versions (basic string comparison - assumes semantic versioning)
+  if [ "$VERSION" != "$remote_version" ]; then
+    echo -e "\n${YELLOW}${BOLD}A new version of ServerCozy is available!${NC}"
+    echo -e "Current version: ${YELLOW}$VERSION${NC}"
+    echo -e "Latest version: ${GREEN}$remote_version${NC}"
+    echo
+    echo -e "Would you like to update to the latest version? (y/n)"
+    read -p "> " do_update
+    
+    if [[ "$do_update" =~ ^[Yy]$ ]]; then
+      log "INFO" "Updating to version $remote_version"
+      
+      # Make new script executable
+      chmod +x "$temp_script"
+      
+      # Create backup of current script
+      local backup_script="${0}.backup.$(date +%Y%m%d%H%M%S)"
+      cp "$0" "$backup_script"
+      log "INFO" "Created backup of current script at $backup_script"
+      
+      # Replace current script with new one
+      if cp "$temp_script" "$0"; then
+        log "SUCCESS" "Successfully updated to version $remote_version"
+        echo -e "\n${GREEN}Update successful!${NC} Restarting script with new version."
+        exec "$0" "$@" --skip-update
+        # Script execution will stop here and restart with new version
+      else
+        log "ERROR" "Failed to update script due to permissions. Try running with sudo."
+        echo -e "\n${RED}Update failed.${NC} Please try manually downloading the latest version."
+      fi
+    else
+      log "INFO" "Update skipped by user. Continuing with current version."
+    fi
+  else
+    log "INFO" "You are running the latest version ($VERSION)."
+  fi
+  
+  # Clean up
+  rm -f "$temp_script"
+  return 0
 }
 
 # Parse command line arguments
@@ -1258,6 +2117,19 @@ while [[ $# -gt 0 ]]; do
     --no-dialog)
       USE_DIALOG=false
       shift
+      ;;
+    --user-only)
+      USER_INSTALL_ONLY=true
+      log "INFO" "User-only mode enabled. System-wide installations will be skipped."
+      shift
+      ;;
+    --skip-update)
+      SKIP_UPDATE_CHECK=true
+      shift
+      ;;
+    -v|--version)
+      echo "ServerCozy v${VERSION}"
+      exit 0
       ;;
     --help)
       show_help

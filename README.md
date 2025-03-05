@@ -1,47 +1,67 @@
-# ServerCozy 🏡☁️
+# ServerCozy 🏡☁️ v1.9.0
 
 > Make yourself at home in the cloud, instantly.
 
 ![License](https://img.shields.io/github/license/sudharsan-007/servercozy)
 ![Bash](https://img.shields.io/badge/shell-bash-brightgreen)
+![Version](https://img.shields.io/badge/version-1.9.0-blue)
 
-ServerCozy is a script designed to transform bare cloud servers into comfortable, productive environments. It automates the installation of essential tools, configures helpful aliases, and enhances your terminal experience - making any server feel like home in minutes.
+ServerCozy is a script designed to transform bare cloud servers and local environments into comfortable, productive workspaces. It automates the installation of essential tools, configures helpful aliases, and enhances your terminal experience - making any system feel like home in minutes.
 
 ## Overview
 
-Moving into a new server should feel like coming home. ServerCozy automates the setup process by:
+Moving into a new server or setting up a new system should feel like coming home. ServerCozy automates the setup process by:
 
 - Installing carefully selected tools and utilities
 - Configuring a beautiful, informative shell prompt
 - Setting up productivity-enhancing aliases
 - Customizing vim and other tools with sensible defaults
-- Supporting multiple Linux distributions automatically
+- Supporting multiple operating systems automatically
+- Providing robust error handling and self-recovery
 
 ## Features
 
-- **Intelligent OS Detection**
-  - Supports Ubuntu, Debian, CentOS, Fedora, Red Hat, and Alpine Linux
-  - Uses the appropriate package manager (apt, yum/dnf, apk)
+- **Cross-Platform Compatibility**
+  - Supports Ubuntu, Debian, CentOS, Fedora, Red Hat, Alpine Linux, macOS, and BSD variants
+  - Windows Subsystem for Linux (WSL) detection and support
+  - Automatically uses the appropriate package manager (apt, yum/dnf, apk, brew, pacman, pkg)
+  - Fall back to user-level installations when system-wide access isn't available
 
 - **Three-Tier Package Installation**
   - **Essential Tools**: git, curl, wget, htop, tree, unzip, vim, tmux
-  - **Recommended Tools**: exa (modern ls), bat (better cat), ncdu, tldr, jq, fzf, pfetch (system info)
+  - **Recommended Tools**: eza (modern ls, successor to exa), bat (better cat), ncdu, tldr, jq, fzf, pfetch (system info)
   - **Advanced Tools**: ripgrep, fd, neofetch, micro, zoxide, btop
+
+- **Self-Updating Mechanism**
+  - Automatically checks for script updates
+  - Seamlessly updates to the latest version
+  - Creates backups of the previous version
+
+- **Robust Error Handling**
+  - Automatic backup and restore for modified config files
+  - Detailed error reporting with line numbers and command context
+  - Graceful failure recovery
 
 - **Terminal Improvements**
   - Installs JetBrainsMono Nerd Font for improved terminal display
-  - Configures a custom prompt with git branch detection and path shortening
+  - Shell-specific optimized configurations:
+    - Bash: Enhanced prompt with git integration and dynamic path handling
+    - ZSH: Custom prompt with vcs_info integration and clean visuals
+  - Intelligent terminal detection and adaptation
   - Sets up color support and useful icons
 
 - **Productivity Enhancements**
   - Creates helpful aliases like `sysinfo` and `repofetch`
-  - Configures vim with sensible defaults
+  - OS-aware system information display
+  - Configures vim with sensible defaults, key mappings, and syntax highlighting
+  - Intelligent PATH management for user-installed binaries
   - Sets up tmux for session management
 
-- **Interactive Mode**
-  - Choose exactly which tools you want to install
-  - Clear color-coded output
-  - Detailed progress information
+- **User Experience**
+  - Interactive installation with multiple UI options (dialog TUI or text-based)
+  - Progress reporting with elapsed time tracking
+  - Detailed logging for troubleshooting
+  - Lock file mechanism to prevent multiple simultaneous runs
 
 ## Installation
 
@@ -79,6 +99,18 @@ chmod +x server-cozy.sh
 # Non-interactive mode with default selections
 ./server-cozy.sh --non-interactive
 
+# Skip system-wide installations, use user directories only
+./server-cozy.sh --user-only
+
+# Force text-based interface (don't use dialog TUI)
+./server-cozy.sh --no-dialog
+
+# Skip checking for script updates
+./server-cozy.sh --skip-update
+
+# Display version information
+./server-cozy.sh -v
+
 # Show help
 ./server-cozy.sh --help
 ```
@@ -102,7 +134,7 @@ chmod +x server-cozy.sh
 
 | Tool | Description |
 |------|-------------|
-| exa | Modern replacement for ls |
+| eza | Modern replacement for ls (successor to exa) |
 | bat | Cat clone with syntax highlighting |
 | ncdu | Disk usage analyzer with ncurses interface |
 | tldr | Simplified man pages |
@@ -140,9 +172,10 @@ alias ..='cd ..'
 alias ...='cd ../..'
 
 # Enhanced commands
-alias ls='exa --icons'  # If exa is installed
-alias ll='exa -alF --icons'
-alias lt='exa -T --icons'
+alias ls='eza --icons'  # If eza is installed
+alias ll='eza -alF --icons'
+alias lt='eza -T --icons'
+# Backward compatibility for exa also supported
 alias cat='bat'  # If bat is installed
 
 # System information
@@ -160,14 +193,16 @@ alias meminfo='free -m -l -t'
 
 ServerCozy sets up vim with developer-friendly defaults:
 
-- Syntax highlighting
-- Line numbers
-- Search highlighting
-- Tab settings (2 spaces)
-- Improved status line
-- Mouse support
+- Syntax highlighting and color schemes
+- Line numbers and ruler
+- Search highlighting with smart case sensitivity
+- Tab settings (2 spaces) with proper indentation
+- Improved status line with file information
+- Full mouse support in terminal
 - Better backspace behavior
-- Command history
+- Extended command history
+- Convenient key mappings for navigation
+- Support for file type detection and plugins
 
 ## Example Use Cases
 
