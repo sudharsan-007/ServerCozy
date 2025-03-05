@@ -114,7 +114,8 @@ check_executable() {
 }
 
 # Script version
-VERSION="1.9.0"
+VERSION="1.9.2"
+SCRIPT_VERSION="$VERSION"
 
 # Default values
 INTERACTIVE=true
@@ -179,7 +180,7 @@ ADVANCED_TOOLS=(
 
 # Function to display help
 show_help() {
-  echo -e "${BLUE}${BOLD}ServerCozy v${VERSION}${NC}"
+  echo -e "${BLUE}${BOLD}ServerCozy v${SCRIPT_VERSION}${NC}"
   echo
   echo "This script enhances a cloud server environment with useful tools and configurations."
   echo "It automates the installation of common utilities, shell improvements, and productivity tools."
@@ -852,7 +853,7 @@ dialog_menu() {
   done
   
   # Run the dialog checklist
-  dialog --backtitle "ServerCozy v${VERSION}" \
+  dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
          --title "$title" \
          --checklist "Use UP/DOWN arrows to navigate, SPACE to toggle selection, ENTER to confirm" \
          $dialog_height $dialog_width $list_height \
@@ -2053,10 +2054,9 @@ main() {
   # Check if script is executable
   update_progress "Checking script permissions"
   check_executable
-  
   # Display banner
   echo -e "${BLUE}${BOLD}===========================================================${NC}"
-  echo -e "${BLUE}${BOLD}           ServerCozy v${VERSION}            ${NC}"
+  echo -e "${BLUE}${BOLD}           ServerCozy v${SCRIPT_VERSION}            ${NC}"
   echo -e "${BLUE}${BOLD}===========================================================${NC}"
   echo
   
@@ -2158,14 +2158,15 @@ check_for_updates() {
     rm -f "$temp_script"
     return 1
   fi
-  
-  log "INFO" "Current version: $VERSION, Latest version: $remote_version"
+  # Display both script version and OS version for clarity
+  log "INFO" "Script version: $SCRIPT_VERSION, Latest version: $remote_version"
+  log "INFO" "OS version: $OS_NAME $OS_VERSION"
   
   # Compare versions (basic string comparison - assumes semantic versioning)
-  if [ "$VERSION" != "$remote_version" ]; then
-    # Don't confuse with OS_VERSION
+  if [ "$SCRIPT_VERSION" != "$remote_version" ]; then
+    # Display update notification
     echo -e "\n${YELLOW}${BOLD}A new version of ServerCozy is available!${NC}"
-    echo -e "Current script version: ${YELLOW}$VERSION${NC}"
+    echo -e "Current script version: ${YELLOW}$SCRIPT_VERSION${NC}"
     echo -e "Latest script version: ${GREEN}$remote_version${NC}"
     echo
     echo -e "Would you like to update to the latest version? (y/n)"
@@ -2196,7 +2197,7 @@ check_for_updates() {
       log "INFO" "Update skipped by user. Continuing with current version."
     fi
   else
-    log "INFO" "You are running the latest version ($VERSION)."
+    log "INFO" "You are running the latest version ($SCRIPT_VERSION)."
   fi
   
   # Clean up
@@ -2231,7 +2232,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -v|--version)
-      echo "ServerCozy v${VERSION}"
+      echo "ServerCozy v${SCRIPT_VERSION}"
       exit 0
       ;;
     --help)
