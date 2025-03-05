@@ -239,6 +239,16 @@ install_package() {
   fi
 }
 
+# Function to detect terminal capabilities
+check_terminal_capabilities() {
+  # Check if tput works with this terminal
+  if tput sc >/dev/null 2>&1 && tput rc >/dev/null 2>&1 && tput ed >/dev/null 2>&1 && tput civis >/dev/null 2>&1; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 # Function to create an interactive selection menu with arrow keys and spacebar
 interactive_menu() {
   local -n items=$1        # Reference to array of items to display
@@ -256,24 +266,31 @@ interactive_menu() {
     done
   fi
   
+  # Check if we can use advanced terminal features
+  if ! check_terminal_capabilities; then
+    log "WARNING" "Your terminal doesn't support advanced features. Using simplified menu instead."
+    basic_interactive_menu items selected "$title" "$default_state"
+    return
+  fi
+  
   # Terminal control sequences
   local ESC=$'\e'
   local cursor_pos=0
   local key
   local menu_size=${#items[@]}
   
-  # Save cursor position and disable cursor
-  tput sc
-  tput civis
+  # Save cursor position and disable cursor (with error suppression)
+  tput sc >/dev/null 2>&1
+  tput civis >/dev/null 2>&1
   
-  # Set terminal to raw mode
-  stty -echo raw
+  # Set terminal to raw mode (with error suppression)
+  stty -echo raw 2>/dev/null
   
   # Render menu function
   render_menu() {
     # Clear previous menu (move to saved position and clear below)
-    tput rc
-    tput ed
+    tput rc >/dev/null 2>&1
+    tput ed >/dev/null 2>&1
     
     echo -e "${BOLD}${title}${NC}"
     
@@ -353,9 +370,61 @@ interactive_menu() {
     process_key || break
   done
   
-  # Restore terminal settings
-  stty echo -raw
-  tput cnorm
+  # Restore terminal settings (with error suppression)
+  stty echo -raw 2>/dev/null
+  tput cnorm >/dev/null 2>&1
+  echo
+}
+
+# Fallback menu for terminals without advanced capabilities
+basic_interactive_menu() {
+  local -n items=$1        # Reference to array of items to display
+  local -n selected=$2     # Reference to array to store selected indexes
+  local title=$3           # Title to display
+  local default_state=$4   # Default selection state (true/false)
+  
+  echo -e "${BOLD}${title}${NC}"
+  echo "Select items by typing their numbers separated by spaces."
+  echo -e "Default selections are marked with [${GREEN}x${NC}].\n"
+  
+  # Show the list with numbers
+  for i in "${!items[@]}"; do
+    IFS=':' read -r pkg desc <<< "${items[$i]}"
+    # Display default selection state
+    if [[ " ${selected[*]} " =~ " $i " ]]; then
+      echo -e "$((i+1)). [${GREEN}x${NC}] ${BOLD}$pkg${NC} - $desc"
+    else
+      echo -e "$((i+1)). [ ] ${BOLD}$pkg${NC} - $desc"
+    fi
+  done
+  
+  # Get user input
+  echo
+  echo -e "${GRAY}Enter numbers to select (press ENTER to accept defaults):${NC}"
+  read -r user_selection
+  
+  # Process user input if any was provided
+  if [ -n "$user_selection" ]; then
+    # Clear the selected array since we're setting a new custom selection
+    selected=()
+    
+    # Parse each number
+    for num in $user_selection; do
+      # Convert to 0-based index and add to selected array
+      idx=$((num-1))
+      # Verify it's a valid index
+      if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#items[@]}" ]; then
+        selected+=($idx)
+      fi
+    done
+  fi
+  
+  # Show final selection
+  echo -e "\n${BOLD}Selected items:${NC}"
+  for i in "${selected[@]}"; do
+    IFS=':' read -r pkg desc <<< "${items[$i]}"
+    echo -e "  ${GREEN}✓${NC} $pkg - $desc"
+  done
   echo
 }
 
