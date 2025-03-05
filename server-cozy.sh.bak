@@ -239,126 +239,6 @@ install_package() {
   fi
 }
 
-# Function to create an interactive selection menu with arrow keys and spacebar
-interactive_menu() {
-  local -n items=$1        # Reference to array of items to display
-  local -n selected=$2     # Reference to array to store selected indexes
-  local title=$3           # Title to display
-  local default_state=$4   # Default selection state (true/false)
-  
-  # Clear the array for storing selected indexes
-  selected=()
-  
-  # Initialize with default selection state if provided
-  if [ "$default_state" = true ]; then
-    for i in "${!items[@]}"; do
-      selected+=($i)
-    done
-  fi
-  
-  # Terminal control sequences
-  local ESC=$'\e'
-  local cursor_pos=0
-  local key
-  local menu_size=${#items[@]}
-  
-  # Save cursor position and disable cursor
-  tput sc
-  tput civis
-  
-  # Set terminal to raw mode
-  stty -echo raw
-  
-  # Render menu function
-  render_menu() {
-    # Clear previous menu (move to saved position and clear below)
-    tput rc
-    tput ed
-    
-    echo -e "${BOLD}${title}${NC}"
-    
-    for i in "${!items[@]}"; do
-      IFS=':' read -r pkg desc <<< "${items[$i]}"
-      
-      # Draw selected/unselected box and highlight current position
-      if [[ " ${selected[*]} " =~ " $i " ]]; then
-        if [ "$i" -eq "$cursor_pos" ]; then
-          echo -e " ${CYAN}${BOLD}→${NC} [${GREEN}x${NC}] ${BOLD}$pkg${NC} - $desc"
-        else
-          echo -e "   [${GREEN}x${NC}] ${BOLD}$pkg${NC} - $desc"
-        fi
-      else
-        if [ "$i" -eq "$cursor_pos" ]; then
-          echo -e " ${CYAN}${BOLD}→${NC} [ ] ${BOLD}$pkg${NC} - $desc"
-        else
-          echo -e "   [ ] ${BOLD}$pkg${NC} - $desc"
-        fi
-      fi
-    done
-    
-    echo -e "\n${GRAY}Use ↑/↓ arrows to navigate, SPACE to toggle selection, ENTER to confirm${NC}"
-  }
-  
-  # Process keypress function
-  process_key() {
-    local key
-    
-    # Read a single character
-    key=$(dd bs=1 count=1 2>/dev/null)
-    
-    # Handle escape sequences (arrow keys)
-    if [[ $key = $ESC ]]; then
-      read -t 0.1 -rsn1 key
-      if [[ $key = "[" ]]; then
-        read -t 0.1 -rsn1 key
-        case $key in
-          A) # Up arrow
-            ((cursor_pos--))
-            if [ $cursor_pos -lt 0 ]; then
-              cursor_pos=$((menu_size - 1))
-            fi
-            ;;
-          B) # Down arrow
-            ((cursor_pos++))
-            if [ $cursor_pos -ge $menu_size ]; then
-              cursor_pos=0
-            fi
-            ;;
-        esac
-      fi
-    elif [[ $key = " " ]]; then # Spacebar
-      # Toggle selection state
-      if [[ " ${selected[*]} " =~ " $cursor_pos " ]]; then
-        # Remove from selected array
-        local temp_selected=()
-        for i in "${selected[@]}"; do
-          if [ "$i" != "$cursor_pos" ]; then
-            temp_selected+=($i)
-          fi
-        done
-        selected=("${temp_selected[@]}")
-      else
-        # Add to selected array
-        selected+=($cursor_pos)
-      fi
-    elif [[ $key = $'\r' ]]; then # Enter key
-      return 1
-    fi
-    return 0
-  }
-  
-  # Main menu loop
-  while true; do
-    render_menu
-    process_key || break
-  done
-  
-  # Restore terminal settings
-  stty echo -raw
-  tput cnorm
-  echo
-}
-
 # Function to display package selection
 select_packages() {
   # Clear the global array
@@ -366,49 +246,53 @@ select_packages() {
   
   echo -e "\n${BOLD}${CYAN}Select packages to install:${NC}"
   
-  if [ "$INTERACTIVE" = true ]; then
-    # Arrays to store selected indexes
-    local essential_selected=()
-    local recommended_selected=()
-    local advanced_selected=()
-    
-    # Run interactive selection for each category
-    interactive_menu ESSENTIAL_TOOLS essential_selected "${BOLD}Essential Tools:${NC}" true
-    interactive_menu RECOMMENDED_TOOLS recommended_selected "${BOLD}Recommended Tools:${NC}" true
-    interactive_menu ADVANCED_TOOLS advanced_selected "${BOLD}Advanced Tools:${NC}" false
-    
-    # Add selected tools to global SELECTED_PACKAGES array
-    for i in "${essential_selected[@]}"; do
-      SELECTED_PACKAGES+=("${ESSENTIAL_TOOLS[$i]}")
-    done
-    
-    for i in "${recommended_selected[@]}"; do
-      SELECTED_PACKAGES+=("${RECOMMENDED_TOOLS[$i]}")
-    done
-    
-    for i in "${advanced_selected[@]}"; do
-      SELECTED_PACKAGES+=("${ADVANCED_TOOLS[$i]}")
-    done
-  else
-    # Non-interactive mode uses default selections
-    if [ "$INSTALL_ESSENTIALS" = true ]; then
-      for tool in "${ESSENTIAL_TOOLS[@]}"; do
+  echo -e "\n${BOLD}Essential Tools:${NC}"
+  for tool in "${ESSENTIAL_TOOLS[@]}"; do
+    IFS=':' read -r pkg desc <<< "$tool"
+    if [ "$INTERACTIVE" = true ]; then
+      read -p "Install $pkg ($desc)? [Y/n] " choice
+      choice=${choice:-Y}
+      if [[ $choice =~ ^[Yy]$ ]]; then
         SELECTED_PACKAGES+=("$tool")
-      done
-    fi
-    
-    if [ "$INSTALL_RECOMMENDED" = true ]; then
-      for tool in "${RECOMMENDED_TOOLS[@]}"; do
+      fi
+    else
+      if [ "$INSTALL_ESSENTIALS" = true ]; then
         SELECTED_PACKAGES+=("$tool")
-      done
+      fi
     fi
-    
-    if [ "$INSTALL_ADVANCED" = true ]; then
-      for tool in "${ADVANCED_TOOLS[@]}"; do
+  done
+  
+  echo -e "\n${BOLD}Recommended Tools:${NC}"
+  for tool in "${RECOMMENDED_TOOLS[@]}"; do
+    IFS=':' read -r pkg desc <<< "$tool"
+    if [ "$INTERACTIVE" = true ]; then
+      read -p "Install $pkg ($desc)? [Y/n] " choice
+      choice=${choice:-Y}
+      if [[ $choice =~ ^[Yy]$ ]]; then
         SELECTED_PACKAGES+=("$tool")
-      done
+      fi
+    else
+      if [ "$INSTALL_RECOMMENDED" = true ]; then
+        SELECTED_PACKAGES+=("$tool")
+      fi
     fi
-  fi
+  done
+  
+  echo -e "\n${BOLD}Advanced Tools:${NC}"
+  for tool in "${ADVANCED_TOOLS[@]}"; do
+    IFS=':' read -r pkg desc <<< "$tool"
+    if [ "$INTERACTIVE" = true ]; then
+      read -p "Install $pkg ($desc)? [y/N] " choice
+      choice=${choice:-N}
+      if [[ $choice =~ ^[Yy]$ ]]; then
+        SELECTED_PACKAGES+=("$tool")
+      fi
+    else
+      if [ "$INSTALL_ADVANCED" = true ]; then
+        SELECTED_PACKAGES+=("$tool")
+      fi
+    fi
+  done
   
   echo
   
