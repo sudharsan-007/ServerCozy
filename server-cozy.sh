@@ -239,193 +239,81 @@ install_package() {
   fi
 }
 
-# Function to detect terminal capabilities
-check_terminal_capabilities() {
-  # Check if tput works with this terminal
-  if tput sc >/dev/null 2>&1 && tput rc >/dev/null 2>&1 && tput ed >/dev/null 2>&1 && tput civis >/dev/null 2>&1; then
-    return 0
-  else
-    return 1
-  fi
-}
-
-# Function to create an interactive selection menu with arrow keys and spacebar
+# Function to create a simple checkbox menu that works in all terminals
 interactive_menu() {
-  local -n items=$1        # Reference to array of items to display
-  local -n selected=$2     # Reference to array to store selected indexes
-  local title=$3           # Title to display
-  local default_state=$4   # Default selection state (true/false)
+  local items_array_name=$1     # Name of the array containing items
+  local selected_array_name=$2  # Name of the array to store selected indices
+  local title=$3                # Title to display
+  local default_state=$4        # Default selection state (true/false)
   
-  # Clear the array for storing selected indexes
-  selected=()
+  # Get the array content through indirect reference
+  eval "local items=(\"\${$items_array_name[@]}\")"
   
-  # Initialize with default selection state if provided
+  # Create an array to track selections (0=unselected, 1=selected)
+  local selection_state=()
+  
+  # Initialize the selection state based on default state
   if [ "$default_state" = true ]; then
     for i in "${!items[@]}"; do
-      selected+=($i)
+      selection_state[i]=1
     done
-  fi
-  
-  # Check if we can use advanced terminal features
-  if ! check_terminal_capabilities; then
-    log "WARNING" "Your terminal doesn't support advanced features. Using simplified menu instead."
-    basic_interactive_menu items selected "$title" "$default_state"
-    return
-  fi
-  
-  # Terminal control sequences
-  local ESC=$'\e'
-  local cursor_pos=0
-  local key
-  local menu_size=${#items[@]}
-  
-  # Save cursor position and disable cursor (with error suppression)
-  tput sc >/dev/null 2>&1
-  tput civis >/dev/null 2>&1
-  
-  # Set terminal to raw mode (with error suppression)
-  stty -echo raw 2>/dev/null
-  
-  # Render menu function
-  render_menu() {
-    # Clear previous menu (move to saved position and clear below)
-    tput rc >/dev/null 2>&1
-    tput ed >/dev/null 2>&1
-    
-    echo -e "${BOLD}${title}${NC}"
-    
+  else
     for i in "${!items[@]}"; do
-      IFS=':' read -r pkg desc <<< "${items[$i]}"
-      
-      # Draw selected/unselected box and highlight current position
-      if [[ " ${selected[*]} " =~ " $i " ]]; then
-        if [ "$i" -eq "$cursor_pos" ]; then
-          echo -e " ${CYAN}${BOLD}→${NC} [${GREEN}x${NC}] ${BOLD}$pkg${NC} - $desc"
-        else
-          echo -e "   [${GREEN}x${NC}] ${BOLD}$pkg${NC} - $desc"
-        fi
-      else
-        if [ "$i" -eq "$cursor_pos" ]; then
-          echo -e " ${CYAN}${BOLD}→${NC} [ ] ${BOLD}$pkg${NC} - $desc"
-        else
-          echo -e "   [ ] ${BOLD}$pkg${NC} - $desc"
-        fi
-      fi
+      selection_state[i]=0
     done
-    
-    echo -e "\n${GRAY}Use ↑/↓ arrows to navigate, SPACE to toggle selection, ENTER to confirm${NC}"
-  }
+  fi
   
-  # Process keypress function
-  process_key() {
-    local key
-    
-    # Read a single character
-    key=$(dd bs=1 count=1 2>/dev/null)
-    
-    # Handle escape sequences (arrow keys)
-    if [[ $key = $ESC ]]; then
-      read -t 0.1 -rsn1 key
-      if [[ $key = "[" ]]; then
-        read -t 0.1 -rsn1 key
-        case $key in
-          A) # Up arrow
-            ((cursor_pos--))
-            if [ $cursor_pos -lt 0 ]; then
-              cursor_pos=$((menu_size - 1))
-            fi
-            ;;
-          B) # Down arrow
-            ((cursor_pos++))
-            if [ $cursor_pos -ge $menu_size ]; then
-              cursor_pos=0
-            fi
-            ;;
-        esac
-      fi
-    elif [[ $key = " " ]]; then # Spacebar
-      # Toggle selection state
-      if [[ " ${selected[*]} " =~ " $cursor_pos " ]]; then
-        # Remove from selected array
-        local temp_selected=()
-        for i in "${selected[@]}"; do
-          if [ "$i" != "$cursor_pos" ]; then
-            temp_selected+=($i)
-          fi
-        done
-        selected=("${temp_selected[@]}")
-      else
-        # Add to selected array
-        selected+=($cursor_pos)
-      fi
-    elif [[ $key = $'\r' ]]; then # Enter key
-      return 1
-    fi
-    return 0
-  }
+  echo -e "\n${BOLD}${title}${NC}"
   
-  # Main menu loop
-  while true; do
-    render_menu
-    process_key || break
-  done
-  
-  # Restore terminal settings (with error suppression)
-  stty echo -raw 2>/dev/null
-  tput cnorm >/dev/null 2>&1
-  echo
-}
-
-# Fallback menu for terminals without advanced capabilities
-basic_interactive_menu() {
-  local -n items=$1        # Reference to array of items to display
-  local -n selected=$2     # Reference to array to store selected indexes
-  local title=$3           # Title to display
-  local default_state=$4   # Default selection state (true/false)
-  
-  echo -e "${BOLD}${title}${NC}"
-  echo "Select items by typing their numbers separated by spaces."
-  echo -e "Default selections are marked with [${GREEN}x${NC}].\n"
-  
-  # Show the list with numbers
+  # Display items with their selection state and numbers
   for i in "${!items[@]}"; do
     IFS=':' read -r pkg desc <<< "${items[$i]}"
-    # Display default selection state
-    if [[ " ${selected[*]} " =~ " $i " ]]; then
+    if [ "${selection_state[$i]}" -eq 1 ]; then
       echo -e "$((i+1)). [${GREEN}x${NC}] ${BOLD}$pkg${NC} - $desc"
     else
       echo -e "$((i+1)). [ ] ${BOLD}$pkg${NC} - $desc"
     fi
   done
   
-  # Get user input
-  echo
-  echo -e "${GRAY}Enter numbers to select (press ENTER to accept defaults):${NC}"
-  read -r user_selection
+  # Prompt user for selection
+  echo -e "\n${GRAY}Enter numbers to toggle selection (e.g., \"1 3 5\")${NC}"
+  echo -e "${GRAY}or press ENTER to accept current selection${NC}"
+  echo -n "> "
+  read -r selections
   
-  # Process user input if any was provided
-  if [ -n "$user_selection" ]; then
-    # Clear the selected array since we're setting a new custom selection
-    selected=()
-    
-    # Parse each number
-    for num in $user_selection; do
-      # Convert to 0-based index and add to selected array
+  # Process selections if user entered any
+  if [ -n "$selections" ]; then
+    for num in $selections; do
+      # Convert to 0-based index
       idx=$((num-1))
-      # Verify it's a valid index
+      
+      # Verify it's valid and toggle
       if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#items[@]}" ]; then
-        selected+=($idx)
+        if [ "${selection_state[$idx]}" -eq 1 ]; then
+          selection_state[$idx]=0
+        else
+          selection_state[$idx]=1
+        fi
+      fi
+    done
+    
+    # Show updated selection
+    echo -e "\n${BOLD}Updated selection:${NC}"
+    for i in "${!items[@]}"; do
+      IFS=':' read -r pkg desc <<< "${items[$i]}"
+      if [ "${selection_state[$i]}" -eq 1 ]; then
+        echo -e "[${GREEN}x${NC}] ${BOLD}$pkg${NC}"
       fi
     done
   fi
   
-  # Show final selection
-  echo -e "\n${BOLD}Selected items:${NC}"
-  for i in "${selected[@]}"; do
-    IFS=':' read -r pkg desc <<< "${items[$i]}"
-    echo -e "  ${GREEN}✓${NC} $pkg - $desc"
+  # Convert selection_state to selected indices and update the output array
+  eval "$selected_array_name=()"
+  for i in "${!selection_state[@]}"; do
+    if [ "${selection_state[$i]}" -eq 1 ]; then
+      eval "$selected_array_name+=($i)"
+    fi
   done
-  echo
 }
 
 # Function to display package selection
@@ -442,9 +330,9 @@ select_packages() {
     local advanced_selected=()
     
     # Run interactive selection for each category
-    interactive_menu ESSENTIAL_TOOLS essential_selected "${BOLD}Essential Tools:${NC}" true
-    interactive_menu RECOMMENDED_TOOLS recommended_selected "${BOLD}Recommended Tools:${NC}" true
-    interactive_menu ADVANCED_TOOLS advanced_selected "${BOLD}Advanced Tools:${NC}" false
+    interactive_menu "ESSENTIAL_TOOLS" "essential_selected" "Essential Tools:" true
+    interactive_menu "RECOMMENDED_TOOLS" "recommended_selected" "Recommended Tools:" true
+    interactive_menu "ADVANCED_TOOLS" "advanced_selected" "Advanced Tools:" false
     
     # Add selected tools to global SELECTED_PACKAGES array
     for i in "${essential_selected[@]}"; do
@@ -479,7 +367,22 @@ select_packages() {
     fi
   fi
   
-  echo
+  # Show summary of selections
+  echo -e "\n${BOLD}${CYAN}Summary of selections:${NC}"
+  echo -e "The following tools will be installed:"
+  
+  local count=0
+  for tool in "${SELECTED_PACKAGES[@]}"; do
+    IFS=':' read -r pkg desc <<< "$tool"
+    echo -e "  ${GREEN}•${NC} ${BOLD}$pkg${NC} - $desc"
+    count=$((count+1))
+  done
+  
+  if [ $count -eq 0 ]; then
+    echo -e "  ${YELLOW}No tools selected${NC}"
+  else
+    echo -e "\n${CYAN}Installing $count tool(s)...${NC}"
+  fi
   
   # Install selected packages
   for tool in "${SELECTED_PACKAGES[@]}"; do
