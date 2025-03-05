@@ -1074,20 +1074,11 @@ select_packages() {
     # Update progress counter
     current=$((current + 1))
     
-    # Calculate percentage and bar
+    # Calculate percentage and simplify the progress bar for better SSH compatibility
     local percent=$((current * 100 / total_packages))
-    local completed=$((current * progress_width / total_packages))
-    local remaining=$((progress_width - completed))
     
-    # Create progress bar string
-    local progress_bar="["
-    for ((i=0; i<completed; i++)); do progress_bar+="="; done
-    if [ $completed -lt $progress_width ]; then progress_bar+=">"; fi
-    for ((i=0; i<remaining-1; i++)); do progress_bar+=" "; done
-    progress_bar+="]"
-    
-    # Show progress before attempting install
-    printf "\r${BLUE}%-30s${NC} %s ${GREEN}%3d%%${NC}" "$pkg" "$progress_bar" "$percent"
+    # Create a simpler ASCII progress bar that works better in SSH
+    echo -ne "\r\033[K${BLUE}[$percent%]${NC} Installing: ${GREEN}$pkg${NC}"
     
     # Install the package
     if install_package "$pkg" "$desc"; then
@@ -1797,13 +1788,21 @@ show_summary() {
   local all_tools=("${ESSENTIAL_TOOLS[@]}" "${RECOMMENDED_TOOLS[@]}" "${ADVANCED_TOOLS[@]}")
   local installed_count=0
   
+  # Temporarily silence the debugging logs
+  LOG_DEBUG_TEMP="$LOG_DEBUG"
+  LOG_DEBUG=false
+  
   for tool in "${all_tools[@]}"; do
     IFS=':' read -r pkg desc <<< "$tool"
-    if command -v "$pkg" &>/dev/null || is_installed "$pkg"; then
+    # Check for installation without triggering debug logs
+    if command -v "$pkg" &>/dev/null || grep -q "ii  $pkg " <<< "$(dpkg -l 2>/dev/null)" || type "$pkg" &>/dev/null; then
       echo -e "  ${GREEN}✓${NC} $pkg - $desc"
       installed_count=$((installed_count+1))
     fi
   done
+  
+  # Restore debug setting
+  LOG_DEBUG="$LOG_DEBUG_TEMP"
   
   if [ $installed_count -eq 0 ]; then
     echo -e "  ${YELLOW}No tools were installed.${NC}"
