@@ -534,30 +534,47 @@ backup_config_file() {
 # Function to check if a package is installed
 is_installed() {
   local package_name="$1"
+  local result=1  # Default to not installed
   
   case $PKG_MANAGER in
     apt)
       dpkg -l | grep -q "ii  $package_name "
+      result=$?
       ;;
     dnf|yum)
       rpm -q "$package_name" &>/dev/null
+      result=$?
       ;;
     apk)
       apk info -e "$package_name" &>/dev/null
+      result=$?
       ;;
     brew)
       brew list "$package_name" &>/dev/null
+      result=$?
       ;;
     pacman)
       pacman -Q "$package_name" &>/dev/null
+      result=$?
       ;;
     pkg)
       pkg info -e "$package_name" &>/dev/null
+      result=$?
       ;;
     *)
       command -v "$package_name" &>/dev/null
+      result=$?
       ;;
   esac
+  
+  # Log the result for debugging
+  if [ $result -eq 0 ]; then
+    log "INFO" "DEBUG: Package $package_name is already installed"
+  else
+    log "INFO" "DEBUG: Package $package_name is not installed (exit code $result)"
+  fi
+  
+  return $result
 }
 
 # Function to detect system architecture and set appropriate variables
@@ -665,7 +682,13 @@ install_package() {
     return 0
   fi
   
+  # Log more detailed debugging information
+  log "INFO" "DEBUG: Starting installation process for $package_name"
+  
   log "INFO" "Installing $package_name ($description)..."
+  
+  # Add diagnostic logging
+  log "INFO" "DEBUG: is_installed result for $package_name: $?"
   
   # Try user-level installation in user-only mode for certain packages
   if [ "$USER_INSTALL_ONLY" = true ] && [ "$PKG_MANAGER" != "brew" ]; then
@@ -696,24 +719,65 @@ install_package() {
   fi
   
   # Proceed with system-level installation
+  local install_output=""
+  local install_exit_code=0
+  local already_newest=false
+  
   case $PKG_MANAGER in
     apt)
-      run_with_privileges apt install -y "$package_name" || log "ERROR" "Failed to install $package_name with apt"
+      # Capture output to check for "already newest version" message
+      install_output=$(run_with_privileges apt install -y "$package_name" 2>&1) || install_exit_code=$?
+      if echo "$install_output" | grep -q "is already the newest version"; then
+        already_newest=true
+        log "SUCCESS" "$package_name is already the newest version."
+      elif [ $install_exit_code -ne 0 ]; then
+        log "ERROR" "Failed to install $package_name with apt"
+      fi
       ;;
     dnf|yum)
-      run_with_privileges $PKG_MANAGER install -y "$package_name" || log "ERROR" "Failed to install $package_name with $PKG_MANAGER"
+      install_output=$(run_with_privileges $PKG_MANAGER install -y "$package_name" 2>&1) || install_exit_code=$?
+      if echo "$install_output" | grep -q "already installed"; then
+        already_newest=true
+        log "SUCCESS" "$package_name is already the newest version."
+      elif [ $install_exit_code -ne 0 ]; then
+        log "ERROR" "Failed to install $package_name with $PKG_MANAGER"
+      fi
       ;;
     apk)
-      run_with_privileges apk add "$package_name" || log "ERROR" "Failed to install $package_name with apk"
+      install_output=$(run_with_privileges apk add "$package_name" 2>&1) || install_exit_code=$?
+      if echo "$install_output" | grep -q "already exists"; then
+        already_newest=true
+        log "SUCCESS" "$package_name is already the newest version."
+      elif [ $install_exit_code -ne 0 ]; then
+        log "ERROR" "Failed to install $package_name with apk"
+      fi
       ;;
     brew)
-      brew install "$package_name" || log "ERROR" "Failed to install $package_name with Homebrew"
+      install_output=$(brew install "$package_name" 2>&1) || install_exit_code=$?
+      if echo "$install_output" | grep -q "already installed"; then
+        already_newest=true
+        log "SUCCESS" "$package_name is already the newest version."
+      elif [ $install_exit_code -ne 0 ]; then
+        log "ERROR" "Failed to install $package_name with Homebrew"
+      fi
       ;;
     pacman)
-      run_with_privileges pacman -S --noconfirm "$package_name" || log "ERROR" "Failed to install $package_name with pacman"
+      install_output=$(run_with_privileges pacman -S --noconfirm "$package_name" 2>&1) || install_exit_code=$?
+      if echo "$install_output" | grep -q "is up to date"; then
+        already_newest=true
+        log "SUCCESS" "$package_name is already the newest version."
+      elif [ $install_exit_code -ne 0 ]; then
+        log "ERROR" "Failed to install $package_name with pacman"
+      fi
       ;;
     pkg)
-      run_with_privileges pkg install -y "$package_name" || log "ERROR" "Failed to install $package_name with pkg"
+      install_output=$(run_with_privileges pkg install -y "$package_name" 2>&1) || install_exit_code=$?
+      if echo "$install_output" | grep -q "already installed"; then
+        already_newest=true
+        log "SUCCESS" "$package_name is already the newest version."
+      elif [ $install_exit_code -ne 0 ]; then
+        log "ERROR" "Failed to install $package_name with pkg"
+      fi
       ;;
     none|unknown)
       log "WARNING" "No package manager available. Skipping installation of $package_name."
@@ -732,7 +796,10 @@ install_package() {
       ;;
   esac
   
-  if is_installed "$package_name"; then
+  # If the package is already the newest version, consider it a success
+  if [ "$already_newest" = true ]; then
+    return 0
+  elif is_installed "$package_name"; then
     log "SUCCESS" "$package_name installed successfully."
     return 0
   else
@@ -992,11 +1059,46 @@ select_packages() {
     echo -e "\n${CYAN}Installing $count tool(s)...${NC}"
   fi
   
-  # Install selected packages
+  # Setup for progress display
+  local total_packages=${#SELECTED_PACKAGES[@]}
+  local current=0
+  local progress_width=40
+  
+  # Display progress bar header
+  echo -e "\n${BOLD}Installation Progress:${NC}"
+  
+  # Install selected packages with progress bar
   for tool in "${SELECTED_PACKAGES[@]}"; do
     IFS=':' read -r pkg desc <<< "$tool"
-    install_package "$pkg" "$desc"
+    
+    # Update progress counter
+    current=$((current + 1))
+    
+    # Calculate percentage and bar
+    local percent=$((current * 100 / total_packages))
+    local completed=$((current * progress_width / total_packages))
+    local remaining=$((progress_width - completed))
+    
+    # Create progress bar string
+    local progress_bar="["
+    for ((i=0; i<completed; i++)); do progress_bar+="="; done
+    if [ $completed -lt $progress_width ]; then progress_bar+=">"; fi
+    for ((i=0; i<remaining-1; i++)); do progress_bar+=" "; done
+    progress_bar+="]"
+    
+    # Show progress before attempting install
+    printf "\r${BLUE}%-30s${NC} %s ${GREEN}%3d%%${NC}" "$pkg" "$progress_bar" "$percent"
+    
+    # Install the package
+    if install_package "$pkg" "$desc"; then
+      log "INFO" "DEBUG: install_package returned success for $pkg"
+    else
+      log "WARNING" "DEBUG: install_package returned error code $? for $pkg"
+    fi
   done
+  
+  # Print newline after progress bar completes
+  echo
 }
 
 # Function to handle special package cases
