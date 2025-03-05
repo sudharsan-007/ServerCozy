@@ -75,7 +75,7 @@ RECOMMENDED_TOOLS=(
 
 ADVANCED_TOOLS=(
   "ripgrep:Line-oriented search tool (rg)"
-  "fd:Simple, fast, and user-friendly alternative to find"
+  "fd-find:Simple, fast, and user-friendly alternative to find (fd)"
   "neofetch:Command-line system information tool"
   "micro:Modern and intuitive terminal-based text editor"
   "zoxide:Smarter cd command (z)"
@@ -502,6 +502,117 @@ select_packages() {
 
 # Function to handle special package cases
 handle_special_packages() {
+  # Special case for fd-find which might be named differently or need a symlink
+  if [ -n "$(echo "${SELECTED_PACKAGES[@]}" | grep -o "fd-find")" ]; then
+    log "INFO" "Handling fd-find installation and setup..."
+    
+    install_success=false
+    local binary_name=""
+    
+    # Try to install with the appropriate package name for the distro
+    case $OS_TYPE in
+      debian)
+        # On Debian/Ubuntu the package is fd-find but binary is fdfind
+        if sudo apt install -y fd-find; then
+          if command -v fdfind &>/dev/null; then
+            binary_name="fdfind"
+            install_success=true
+            log "SUCCESS" "Installed fd-find package successfully."
+          fi
+        fi
+        ;;
+      redhat)
+        # On Fedora it's fd-find, on newer versions might be just fd
+        if sudo $PKG_MANAGER install -y fd-find 2>/dev/null; then
+          if command -v fd-find &>/dev/null; then
+            binary_name="fd-find"
+            install_success=true
+          elif command -v fdfind &>/dev/null; then
+            binary_name="fdfind"
+            install_success=true
+          fi
+          log "SUCCESS" "Installed fd-find package successfully."
+        elif sudo $PKG_MANAGER install -y fd 2>/dev/null; then
+          if command -v fd &>/dev/null; then
+            binary_name="fd"
+            install_success=true
+            log "SUCCESS" "Installed fd package successfully."
+          fi
+        fi
+        ;;
+      alpine)
+        # On Alpine it's simply fd
+        if sudo apk add fd; then
+          if command -v fd &>/dev/null; then
+            binary_name="fd"
+            install_success=true
+            log "SUCCESS" "Installed fd package successfully."
+          fi
+        fi
+        ;;
+      *)
+        # Try both names
+        if sudo $PKG_MANAGER install -y fd-find 2>/dev/null || sudo $PKG_MANAGER install -y fd 2>/dev/null; then
+          if command -v fd &>/dev/null; then
+            binary_name="fd"
+            install_success=true
+          elif command -v fdfind &>/dev/null; then
+            binary_name="fdfind"
+            install_success=true
+          elif command -v fd-find &>/dev/null; then
+            binary_name="fd-find"
+            install_success=true
+          fi
+          log "SUCCESS" "Installed fd package successfully."
+        fi
+        ;;
+    esac
+    
+    # If installation failed, try with cargo
+    if [ "$install_success" = false ] && command -v cargo &>/dev/null; then
+      log "INFO" "Trying to install fd-find via cargo..."
+      if cargo install fd-find; then
+        log "SUCCESS" "Installed fd-find via cargo."
+        install_success=true
+        if command -v fd &>/dev/null; then
+          binary_name="fd"
+        fi
+      fi
+    fi
+    
+    # Create ~/.local/bin if it doesn't exist
+    mkdir -p "$HOME/.local/bin"
+    
+    # Create symlink if needed
+    if [ "$install_success" = true ] && [ -n "$binary_name" ] && [ "$binary_name" != "fd" ]; then
+      log "INFO" "Creating 'fd' symlink for convenience..."
+      ln -sf "$(which $binary_name)" "$HOME/.local/bin/fd"
+      
+      # Add ~/.local/bin to PATH if it's not already there
+      if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+        log "INFO" "Adding ~/.local/bin to PATH in shell configuration..."
+        
+        # Determine which shell config file to use
+        if [ -n "$BASH_VERSION" ]; then
+          echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+        elif [ -n "$ZSH_VERSION" ]; then
+          echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+        else
+          # Default to bashrc if we can't detect
+          echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+        fi
+        
+        # Use the new PATH for the current session
+        export PATH="$HOME/.local/bin:$PATH"
+      fi
+      
+      log "SUCCESS" "Created fd symlink in ~/.local/bin/"
+    fi
+    
+    if [ "$install_success" = false ]; then
+      log "WARNING" "Could not install fd-find. Standard find will be used instead."
+    fi
+  fi
   # Special case for eza (successor to exa)
   if ! command -v eza &>/dev/null && [ -n "$(echo "${SELECTED_PACKAGES[@]}" | grep -o "eza")" ]; then
     log "INFO" "Installing eza (modern ls replacement)..."
