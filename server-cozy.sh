@@ -1092,9 +1092,9 @@ handle_special_packages() {
         log "INFO" "Adding ~/.local/bin to PATH in shell configuration..."
         
         # Determine which shell config file to use
-        if [ -n "$BASH_VERSION" ]; then
+        if [ -n "${BASH_VERSION:-}" ]; then
           echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-        elif [ -n "$ZSH_VERSION" ]; then
+        elif [ -n "${ZSH_VERSION:-}" ]; then
           echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
         else
           # Default to bashrc if we can't detect
@@ -1287,9 +1287,9 @@ handle_special_packages() {
         # Make sure ~/.local/bin is in PATH
         if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
           log "INFO" "Adding ~/.local/bin to PATH in shell configuration..."
-          if [ -n "$BASH_VERSION" ]; then
+          if [ -n "${BASH_VERSION:-}" ]; then
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-          elif [ -n "$ZSH_VERSION" ]; then
+          elif [ -n "${ZSH_VERSION:-}" ]; then
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
           else
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
@@ -1397,7 +1397,7 @@ configure_prompt() {
   backup_config_file "$shell_config"
   
   # Add custom prompt configuration
-  if [ -n "$ZSH_VERSION" ]; then
+  if [ -n "${ZSH_VERSION:-}" ]; then
     # ZSH specific prompt configuration
     cat >> "$shell_config" << 'EOF'
 
@@ -1500,7 +1500,7 @@ configure_aliases() {
   
   # Detect shell
   local aliases_file="$HOME/.bash_aliases"
-  if [ -n "$ZSH_VERSION" ]; then
+  if [ -n "${ZSH_VERSION:-}" ]; then
     aliases_file="$HOME/.zsh_aliases"
     
     # Make sure the aliases file is sourced in .zshrc
@@ -2062,9 +2062,10 @@ check_for_updates() {
   
   # Compare versions (basic string comparison - assumes semantic versioning)
   if [ "$VERSION" != "$remote_version" ]; then
+    # Don't confuse with OS_VERSION
     echo -e "\n${YELLOW}${BOLD}A new version of ServerCozy is available!${NC}"
-    echo -e "Current version: ${YELLOW}$VERSION${NC}"
-    echo -e "Latest version: ${GREEN}$remote_version${NC}"
+    echo -e "Current script version: ${YELLOW}$VERSION${NC}"
+    echo -e "Latest script version: ${GREEN}$remote_version${NC}"
     echo
     echo -e "Would you like to update to the latest version? (y/n)"
     read -p "> " do_update
