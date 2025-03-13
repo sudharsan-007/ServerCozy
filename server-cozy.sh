@@ -2513,14 +2513,43 @@ tui_show_installation_start() {
   [ "$CONFIGURE_VIM" = true ] && config_count=$((config_count + 1))
   [ "$CONFIGURE_ALIASES" = true ] && config_count=$((config_count + 1))
   
+  # Print installation information to terminal
+  echo -e "\n${BOLD}${CYAN}=== Starting Installation ===${NC}"
+  echo -e "ServerCozy will install and configure your selections:"
+  echo -e "- ${YELLOW}$package_count${NC} packages to install"
+  echo -e "- ${YELLOW}$config_count${NC} configurations to apply"
+  echo -e "\nThis process may take several minutes. Installation progress will be shown below."
+  echo -e "${GRAY}Press Enter to continue...${NC}"
+  read -p "> "
+  
   # Show installation start message with package count
   dialog --colors \
          --backtitle "ServerCozy v${SCRIPT_VERSION}" \
          --title "\Z1Starting Installation\Zn" \
-         --msgbox "\nAll configuration options have been selected.\n\nServerCozy will now install and configure your selections:\n - $package_count packages to install\n - $config_count configurations to apply\n\nThis process may take several minutes depending on your selections and internet speed.\n\nA progress indicator will show you the current status. If the installation takes longer than expected, detailed logs will be shown periodically." \
+         --yesno "\nAll configuration options have been selected.\n\nServerCozy will now install and configure your selections:\n - $package_count packages to install\n - $config_count configurations to apply\n\nThis process may take several minutes depending on your selections and internet speed.\n\nInstallation progress will be shown in the terminal.\n\nAre you ready to begin the installation?" \
          $dialog_height $dialog_width
   
-  return $?
+  # If user selects "No", ask if they want to abort
+  if [ $? -ne 0 ]; then
+    dialog --colors \
+           --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+           --title "\Z1Confirm Abort\Zn" \
+           --yesno "\nDo you want to abort the installation?" \
+           8 50
+    
+    if [ $? -eq 0 ]; then
+      echo -e "\n${RED}Installation aborted by user.${NC}"
+      exit 0
+    fi
+  fi
+  
+  # Clear screen and show installation header
+  clear
+  echo -e "\n${BOLD}${CYAN}=== ServerCozy Installation in Progress ===${NC}"
+  echo -e "Installing ${YELLOW}$package_count${NC} packages and applying ${YELLOW}$config_count${NC} configurations."
+  echo -e "${GRAY}Installation progress will be shown below:${NC}\n"
+  
+  return 0
 }
 
 # Function to show installation progress using dialog gauge
@@ -2548,10 +2577,13 @@ tui_install_packages() {
     # Log the progress to the log file only
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] [INFO] Installation progress: $percent% - $message" >> "$LOG_FILE"
     
+    # Print progress to terminal as well
+    echo -e "\n${BLUE}[${percent}%]${NC} $message" >&3
+    
     # Update the gauge display directly
     echo $percent | dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
                           --title "Installation Progress" \
-                          --gauge "Installing and configuring selected packages...\n\n$message\n\nPlease wait, this may take a few minutes.\n\nProgress: $percent% complete" 14 70 0
+                          --gauge "Installing and configuring selected packages...\n\n$message\n\nPlease wait, this may take a few minutes.\n\nProgress: $percent% complete" 14 70 0 2>/dev/null || true
   }
   
   # Create a function to show detailed logs if installation takes too long
@@ -2641,11 +2673,16 @@ tui_install_packages() {
   # Complete
   update_progress_gauge "$total_operations" "Installation complete!"
   
+  # Print completion message to terminal
+  echo -e "\n\n${GREEN}${BOLD}Installation complete!${NC}" >&3
+  echo -e "All selected packages and configurations have been successfully installed." >&3
+  echo -e "Proceeding to summary screen...\n" >&3
+  
   # Show completion message
   dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
          --title "Installation Complete" \
          --msgbox "All selected packages and configurations have been successfully installed!\n\nProceeding to summary screen..." \
-         10 60
+         10 60 2>/dev/null || true
   
   # Wait for gauge to reach 100%
   sleep 1
