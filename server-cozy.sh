@@ -6,7 +6,7 @@
 # It automates the installation of common utilities, shell improvements, and productivity tools.
 #
 # Author: Sudharsan Ananth
-# Version: 1.0.0
+# Version: 1.9.3
 # Created: February 2025
 #
 # Usage:
@@ -194,6 +194,7 @@ show_help() {
   echo "  --essential-only     Install only essential tools"
   echo "  --no-dialog          Force text-based interface (don't use dialog TUI)"
   echo "  --user-only          Skip system-wide installations, use user directory only"
+  echo "  --no-nerd-font       Skip Nerd Font installation"
   echo "  --help               Show this help message"
   echo
   echo -e "${YELLOW}${BOLD}Examples:${NC}"
@@ -1415,10 +1416,61 @@ handle_special_packages() {
     fi
   fi
 }
+# Function to configure Nerd Font installation
+configure_nerd_font() {
+  # Skip if non-interactive mode
+  if [ "$INTERACTIVE" = false ]; then
+    log "INFO" "Using default Nerd Font setting in non-interactive mode: $([ "$INSTALL_NERD_FONT" = true ] && echo "enabled" || echo "disabled")"
+    return 0
+  fi
+  
+  echo -e "\n${BOLD}${CYAN}Nerd Font Installation:${NC}"
+  
+  if [ "$DIALOG_AVAILABLE" = true ]; then
+    # Using dialog for selection
+    local temp_file=$(mktemp)
+    
+    dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+           --title "Nerd Font Installation" \
+           --yesno "Install JetBrainsMono Nerd Font?\n\nNerd Fonts add additional glyphs/icons to enhance terminal appearance.\nRecommended for modern terminal experience." \
+           10 60 2> "$temp_file"
+    
+    local result=$?
+    rm -f "$temp_file"
+    
+    if [ $result -eq 0 ]; then
+      INSTALL_NERD_FONT=true
+      echo -e "${GREEN}✓${NC} Nerd Font installation ${GREEN}enabled${NC}"
+    else
+      INSTALL_NERD_FONT=false
+      echo -e "${YELLOW}✗${NC} Nerd Font installation ${YELLOW}disabled${NC}"
+    fi
+  else
+    # Text-based selection
+    echo -e "Nerd Fonts add additional glyphs/icons to enhance terminal appearance."
+    echo -e "Recommended for modern terminal experience.\n"
+    echo -e "Install JetBrainsMono Nerd Font?"
+    echo -e "1. ${GREEN}Yes${NC} - Install Nerd Font (recommended)"
+    echo -e "2. ${YELLOW}No${NC}  - Skip Nerd Font installation"
+    
+    read -p "> " nerd_font_choice
+    
+    if [[ "$nerd_font_choice" =~ ^[Yy]|1$ ]]; then
+      INSTALL_NERD_FONT=true
+      echo -e "${GREEN}✓${NC} Nerd Font installation ${GREEN}enabled${NC}"
+    else
+      INSTALL_NERD_FONT=false
+      echo -e "${YELLOW}✗${NC} Nerd Font installation ${YELLOW}disabled${NC}"
+    fi
+  fi
+  
+  log "INFO" "Nerd Font installation $([ "$INSTALL_NERD_FONT" = true ] && echo "enabled" || echo "disabled") by user"
+}
 
 # Function to install JetBrainsMono Nerd Font
 install_nerd_font() {
   if [ "$INSTALL_NERD_FONT" = false ]; then
+    log "INFO" "Skipping Nerd Font installation as per configuration."
     return 0
   fi
   
@@ -2105,6 +2157,10 @@ main() {
   update_progress "Handling special package cases"
   handle_special_packages
   
+  # Configure Nerd Font installation
+  update_progress "Configuring Nerd Font installation"
+  configure_nerd_font
+  
   # Install Nerd Font (skip in user-only mode)
   if [ "$USER_INSTALL_ONLY" != "true" ]; then
     update_progress "Installing Nerd Font"
@@ -2226,6 +2282,11 @@ while [[ $# -gt 0 ]]; do
     --user-only)
       USER_INSTALL_ONLY=true
       log "INFO" "User-only mode enabled. System-wide installations will be skipped."
+      shift
+      ;;
+    --no-nerd-font)
+      INSTALL_NERD_FONT=false
+      log "INFO" "Nerd Font installation will be skipped."
       shift
       ;;
     --skip-update)
