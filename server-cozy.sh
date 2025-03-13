@@ -1637,6 +1637,110 @@ EOF
   log "SUCCESS" "Custom prompt configured."
 }
 
+# Function to ask user about Vim configuration
+ask_configure_vim() {
+  # Skip if non-interactive mode
+  if [ "$INTERACTIVE" = false ]; then
+    log "INFO" "Using default Vim configuration setting: $([ "$CONFIGURE_VIM" = true ] && echo "enabled" || echo "disabled")"
+    return 0
+  fi
+  
+  echo -e "\n${BOLD}${CYAN}Vim Configuration:${NC}"
+  
+  if [ "$DIALOG_AVAILABLE" = true ]; then
+    # Using dialog for selection
+    local temp_file=$(mktemp)
+    
+    dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+           --title "Vim Configuration" \
+           --yesno "Configure Vim with enhanced settings?\n\nThis will create a .vimrc file with useful defaults." \
+           --defaultno \
+           10 60 2> "$temp_file"
+    
+    local result=$?
+    rm -f "$temp_file"
+    
+    if [ $result -eq 0 ]; then
+      CONFIGURE_VIM=true
+      echo -e "${GREEN}✓${NC} Vim configuration ${GREEN}enabled${NC}"
+    else
+      CONFIGURE_VIM=false
+      echo -e "${YELLOW}✗${NC} Vim configuration ${YELLOW}disabled${NC}"
+    fi
+  else
+    # Text-based selection with yes as default
+    echo -e "Configure Vim with enhanced settings?"
+    echo -e "This will create a .vimrc file with useful defaults."
+    echo -e "1. ${GREEN}Yes${NC} - Configure Vim (default)"
+    echo -e "2. ${YELLOW}No${NC}  - Skip Vim configuration"
+    
+    read -p "> " vim_choice
+    
+    # Default to yes if nothing entered
+    if [[ -z "$vim_choice" || "$vim_choice" =~ ^[Yy]|1$ ]]; then
+      CONFIGURE_VIM=true
+      echo -e "${GREEN}✓${NC} Vim configuration ${GREEN}enabled${NC}"
+    else
+      CONFIGURE_VIM=false
+      echo -e "${YELLOW}✗${NC} Vim configuration ${YELLOW}disabled${NC}"
+    fi
+  fi
+  
+  log "INFO" "Vim configuration $([ "$CONFIGURE_VIM" = true ] && echo "enabled" || echo "disabled") by user"
+}
+
+# Function to ask user about aliases configuration
+ask_configure_aliases() {
+  # Skip if non-interactive mode
+  if [ "$INTERACTIVE" = false ]; then
+    log "INFO" "Using default aliases configuration setting: $([ "$CONFIGURE_ALIASES" = true ] && echo "enabled" || echo "disabled")"
+    return 0
+  fi
+  
+  echo -e "\n${BOLD}${CYAN}Aliases Configuration:${NC}"
+  
+  if [ "$DIALOG_AVAILABLE" = true ]; then
+    # Using dialog for selection
+    local temp_file=$(mktemp)
+    
+    dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+           --title "Aliases Configuration" \
+           --yesno "Configure useful command aliases?\n\nThis will create alias shortcuts for commonly used commands." \
+           --defaultno \
+           10 60 2> "$temp_file"
+    
+    local result=$?
+    rm -f "$temp_file"
+    
+    if [ $result -eq 0 ]; then
+      CONFIGURE_ALIASES=true
+      echo -e "${GREEN}✓${NC} Aliases configuration ${GREEN}enabled${NC}"
+    else
+      CONFIGURE_ALIASES=false
+      echo -e "${YELLOW}✗${NC} Aliases configuration ${YELLOW}disabled${NC}"
+    fi
+  else
+    # Text-based selection with yes as default
+    echo -e "Configure useful command aliases?"
+    echo -e "This will create alias shortcuts for commonly used commands."
+    echo -e "1. ${GREEN}Yes${NC} - Configure aliases (default)"
+    echo -e "2. ${YELLOW}No${NC}  - Skip aliases configuration"
+    
+    read -p "> " aliases_choice
+    
+    # Default to yes if nothing entered
+    if [[ -z "$aliases_choice" || "$aliases_choice" =~ ^[Yy]|1$ ]]; then
+      CONFIGURE_ALIASES=true
+      echo -e "${GREEN}✓${NC} Aliases configuration ${GREEN}enabled${NC}"
+    else
+      CONFIGURE_ALIASES=false
+      echo -e "${YELLOW}✗${NC} Aliases configuration ${YELLOW}disabled${NC}"
+    fi
+  fi
+  
+  log "INFO" "Aliases configuration $([ "$CONFIGURE_ALIASES" = true ] && echo "enabled" || echo "disabled") by user"
+}
+
 # Function to configure useful aliases
 configure_aliases() {
   if [ "$CONFIGURE_ALIASES" = false ]; then
@@ -1755,110 +1859,6 @@ alias help='echo -e "Custom commands:\n  sysinfo - Show system information\n  re
 EOF
   
   log "SUCCESS" "Useful aliases configured in $aliases_file."
-}
-
-# Function to ask user about Vim configuration
-ask_configure_vim() {
-  # Skip if non-interactive mode
-  if [ "$INTERACTIVE" = false ]; then
-    log "INFO" "Using default Vim configuration setting: $([ "$CONFIGURE_VIM" = true ] && echo "enabled" || echo "disabled")"
-    return 0
-  fi
-  
-  echo -e "\n${BOLD}${CYAN}Vim Configuration:${NC}"
-  
-  if [ "$DIALOG_AVAILABLE" = true ]; then
-    # Using dialog for selection
-    local temp_file=$(mktemp)
-    
-    dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
-           --title "Vim Configuration" \
-           --yesno "Configure Vim with enhanced settings?\n\nThis will create a .vimrc file with useful defaults." \
-           10 60 \
-           --defaultno 2> "$temp_file"
-    
-    local result=$?
-    rm -f "$temp_file"
-    
-    if [ $result -eq 0 ]; then
-      CONFIGURE_VIM=true
-      echo -e "${GREEN}✓${NC} Vim configuration ${GREEN}enabled${NC}"
-    else
-      CONFIGURE_VIM=false
-      echo -e "${YELLOW}✗${NC} Vim configuration ${YELLOW}disabled${NC}"
-    fi
-  else
-    # Text-based selection with yes as default
-    echo -e "Configure Vim with enhanced settings?"
-    echo -e "This will create a .vimrc file with useful defaults."
-    echo -e "1. ${GREEN}Yes${NC} - Configure Vim (default)"
-    echo -e "2. ${YELLOW}No${NC}  - Skip Vim configuration"
-    
-    read -p "> " vim_choice
-    
-    # Default to yes if nothing entered
-    if [[ -z "$vim_choice" || "$vim_choice" =~ ^[Yy]|1$ ]]; then
-      CONFIGURE_VIM=true
-      echo -e "${GREEN}✓${NC} Vim configuration ${GREEN}enabled${NC}"
-    else
-      CONFIGURE_VIM=false
-      echo -e "${YELLOW}✗${NC} Vim configuration ${YELLOW}disabled${NC}"
-    fi
-  fi
-  
-  log "INFO" "Vim configuration $([ "$CONFIGURE_VIM" = true ] && echo "enabled" || echo "disabled") by user"
-}
-
-# Function to ask user about aliases configuration
-ask_configure_aliases() {
-  # Skip if non-interactive mode
-  if [ "$INTERACTIVE" = false ]; then
-    log "INFO" "Using default aliases configuration setting: $([ "$CONFIGURE_ALIASES" = true ] && echo "enabled" || echo "disabled")"
-    return 0
-  fi
-  
-  echo -e "\n${BOLD}${CYAN}Aliases Configuration:${NC}"
-  
-  if [ "$DIALOG_AVAILABLE" = true ]; then
-    # Using dialog for selection
-    local temp_file=$(mktemp)
-    
-    dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
-           --title "Aliases Configuration" \
-           --yesno "Configure useful command aliases?\n\nThis will create alias shortcuts for commonly used commands." \
-           10 60 \
-           --defaultno 2> "$temp_file"
-    
-    local result=$?
-    rm -f "$temp_file"
-    
-    if [ $result -eq 0 ]; then
-      CONFIGURE_ALIASES=true
-      echo -e "${GREEN}✓${NC} Aliases configuration ${GREEN}enabled${NC}"
-    else
-      CONFIGURE_ALIASES=false
-      echo -e "${YELLOW}✗${NC} Aliases configuration ${YELLOW}disabled${NC}"
-    fi
-  else
-    # Text-based selection with yes as default
-    echo -e "Configure useful command aliases?"
-    echo -e "This will create alias shortcuts for commonly used commands."
-    echo -e "1. ${GREEN}Yes${NC} - Configure aliases (default)"
-    echo -e "2. ${YELLOW}No${NC}  - Skip aliases configuration"
-    
-    read -p "> " aliases_choice
-    
-    # Default to yes if nothing entered
-    if [[ -z "$aliases_choice" || "$aliases_choice" =~ ^[Yy]|1$ ]]; then
-      CONFIGURE_ALIASES=true
-      echo -e "${GREEN}✓${NC} Aliases configuration ${GREEN}enabled${NC}"
-    else
-      CONFIGURE_ALIASES=false
-      echo -e "${YELLOW}✗${NC} Aliases configuration ${YELLOW}disabled${NC}"
-    fi
-  fi
-  
-  log "INFO" "Aliases configuration $([ "$CONFIGURE_ALIASES" = true ] && echo "enabled" || echo "disabled") by user"
 }
 
 # Function to configure vim
