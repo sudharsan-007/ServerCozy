@@ -2495,6 +2495,34 @@ tui_configure_options() {
   return 0
 }
 
+# Function to show installation transition screen
+tui_show_installation_start() {
+  local term_height=$(tput lines)
+  local term_width=$(tput cols)
+  local dialog_height=$((term_height * 3 / 4))
+  local dialog_width=$((term_width * 3 / 4))
+  
+  # Ensure minimum dimensions
+  [ $dialog_height -lt 20 ] && dialog_height=20
+  [ $dialog_width -lt 75 ] && dialog_width=75
+  
+  # Count selected packages
+  local package_count=${#SELECTED_PACKAGES[@]}
+  local config_count=0
+  [ "$INSTALL_NERD_FONT" = true ] && config_count=$((config_count + 1))
+  [ "$CONFIGURE_VIM" = true ] && config_count=$((config_count + 1))
+  [ "$CONFIGURE_ALIASES" = true ] && config_count=$((config_count + 1))
+  
+  # Show installation start message with package count
+  dialog --colors \
+         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "\Z1Starting Installation\Zn" \
+         --msgbox "\nAll configuration options have been selected.\n\nServerCozy will now install and configure your selections:\n - $package_count packages to install\n - $config_count configurations to apply\n\nThis process may take several minutes depending on your selections and internet speed.\n\nA progress indicator will show you the current status. If the installation takes longer than expected, detailed logs will be shown periodically." \
+         $dialog_height $dialog_width
+  
+  return $?
+}
+
 # Function to show installation progress using dialog gauge
 tui_install_packages() {
   # Count total operations
@@ -2523,7 +2551,27 @@ tui_install_packages() {
     # Update the gauge display directly
     echo $percent | dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
                           --title "Installation Progress" \
-                          --gauge "$message" 10 70 0
+                          --gauge "Installing and configuring selected packages...\n\n$message\n\nPlease wait, this may take a few minutes.\n\nProgress: $percent% complete" 14 70 0
+  }
+  
+  # Create a function to show detailed logs if installation takes too long
+  show_detailed_logs() {
+    local term_height=$(tput lines)
+    local term_width=$(tput cols)
+    local dialog_height=$((term_height * 3 / 4))
+    local dialog_width=$((term_width * 3 / 4))
+    
+    # Ensure minimum dimensions
+    [ $dialog_height -lt 20 ] && dialog_height=20
+    [ $dialog_width -lt 75 ] && dialog_width=75
+    
+    # Get the last 20 lines from the installation log
+    local log_content=$(tail -n 20 "$install_log")
+    
+    dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+           --title "Installation Details" \
+           --msgbox "Installation is in progress. Here are the latest log entries:\n\n$log_content\n\nThe installation will continue after you close this window." \
+           $dialog_height $dialog_width
   }
   
   # Redirect stdout/stderr to log file for installation operations
@@ -2532,6 +2580,8 @@ tui_install_packages() {
   
   # Install packages with progress updates
   local current=0
+  local start_install_time=$(date +%s)
+  local show_logs_interval=30  # Show logs if installation takes more than 30 seconds
   
   # Initial progress
   update_progress_gauge "$current" "Preparing installation..."
@@ -2544,6 +2594,17 @@ tui_install_packages() {
     
     update_progress_gauge "$current" "Installing: $pkg - $desc"
     install_package "$pkg" "$desc"
+    
+    # Check if installation is taking a long time and show logs if needed
+    local current_time=$(date +%s)
+    local elapsed_install_time=$((current_time - start_install_time))
+    
+    if [ $elapsed_install_time -gt $show_logs_interval ] && [ $((current % 3)) -eq 0 ]; then
+      # Show detailed logs every 3rd package if installation is taking a long time
+      show_detailed_logs
+      # Reset the timer so we don't show logs too frequently
+      start_install_time=$(date +%s)
+    fi
   done
   
   # Handle special package cases
@@ -2580,8 +2641,14 @@ tui_install_packages() {
   # Complete
   update_progress_gauge "$total_operations" "Installation complete!"
   
+  # Show completion message
+  dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "Installation Complete" \
+         --msgbox "All selected packages and configurations have been successfully installed!\n\nProceeding to summary screen..." \
+         10 60
+  
   # Wait for gauge to reach 100%
-  sleep 2
+  sleep 1
   
   # Restore original stdout/stderr
   exec 1>&3 2>&4
@@ -2617,6 +2684,11 @@ tui_show_summary() {
     local minutes=$((total_seconds / 60))
     local seconds=$((total_seconds % 60))
     elapsed_time=" in ${minutes}m ${seconds}s"
+  fi
+  
+  # Play a sound to indicate completion (if available)
+  if command -v tput &>/dev/null && tput bel &>/dev/null; then
+    tput bel
   fi
   
   # Build summary message
@@ -2768,7 +2840,7 @@ run_text_interface() {
 # Main function with workflow selection
 main() {
   # Store start time for elapsed time calculation
-  local start_time=$(date +%s)
+  start_time=$(date +%s)
   
   # Check lock file to prevent multiple instances
   check_lock
@@ -2790,6 +2862,7 @@ main() {
     show_prerequisites_screen
     tui_select_packages
     tui_configure_options
+    tui_show_installation_start  # Add transition screen before installation
     tui_install_packages
     tui_show_summary
   else
