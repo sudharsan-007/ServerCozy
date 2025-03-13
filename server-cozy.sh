@@ -1765,7 +1765,10 @@ configure_aliases() {
     fi
   fi
   
-  # Create aliases file if it doesn't exist
+  # Backup existing aliases file if it exists
+  backup_config_file "$aliases_file" || true  # Ignore return value when file doesn't exist
+  
+  # Create/update aliases file
   touch "$aliases_file"
   
   # Add useful aliases
@@ -1870,7 +1873,7 @@ configure_vim() {
   log "INFO" "Configuring vim..."
   
   # Backup existing .vimrc if it exists
-  backup_config_file "$HOME/.vimrc"
+  backup_config_file "$HOME/.vimrc" || true  # Ignore return value when file doesn't exist
   
   # Create .vimrc file
   cat > "$HOME/.vimrc" << 'EOF'
