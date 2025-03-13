@@ -2513,14 +2513,12 @@ tui_show_installation_start() {
   [ "$CONFIGURE_VIM" = true ] && config_count=$((config_count + 1))
   [ "$CONFIGURE_ALIASES" = true ] && config_count=$((config_count + 1))
   
-  # Print installation information to terminal
-  echo -e "\n${BOLD}${CYAN}=== Starting Installation ===${NC}"
-  echo -e "ServerCozy will install and configure your selections:"
-  echo -e "- ${YELLOW}$package_count${NC} packages to install"
-  echo -e "- ${YELLOW}$config_count${NC} configurations to apply"
-  echo -e "\nThis process may take several minutes. Installation progress will be shown below."
-  echo -e "${GRAY}Press Enter to continue...${NC}"
-  read -p "> "
+  # Print installation information to terminal (without requiring Enter press)
+  # echo -e "\n${BOLD}${CYAN}=== Starting Installation ===${NC}"
+  # echo -e "ServerCozy will install and configure your selections:"
+  # echo -e "- ${YELLOW}$package_count${NC} packages to install"
+  # echo -e "- ${YELLOW}$config_count${NC} configurations to apply"
+  # echo -e "\nThis process may take several minutes. Installation progress will be shown below."
   
   # Show installation start message with package count
   dialog --colors \
