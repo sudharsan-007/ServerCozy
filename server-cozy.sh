@@ -2678,14 +2678,15 @@ tui_install_packages() {
   echo -e "All selected packages and configurations have been successfully installed." >&3
   echo -e "Proceeding to summary screen...\n" >&3
   
-  # Show completion message
-  dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
-         --title "Installation Complete" \
-         --msgbox "All selected packages and configurations have been successfully installed!\n\nProceeding to summary screen..." \
-         10 60 2>/dev/null || true
+  # Skip the dialog completion message to avoid getting stuck
+  # Just print the summary directly to the terminal
   
   # Wait for gauge to reach 100%
   sleep 1
+  
+  # Print a message to press Enter to continue to summary
+  echo -e "${YELLOW}Press Enter to view the installation summary...${NC}" >&3
+  read -p "" >&3
   
   # Restore original stdout/stderr
   exec 1>&3 2>&4
@@ -2702,17 +2703,8 @@ tui_install_packages() {
   return 0
 }
 
-# Function to show installation summary using dialog
+# Function to show installation summary using dialog or terminal
 tui_show_summary() {
-  local term_height=$(tput lines)
-  local term_width=$(tput cols)
-  local dialog_height=$((term_height * 3 / 4))
-  local dialog_width=$((term_width * 3 / 4))
-  
-  # Ensure minimum dimensions
-  [ $dialog_height -lt 20 ] && dialog_height=20
-  [ $dialog_width -lt 75 ] && dialog_width=75
-  
   # Calculate elapsed time
   local elapsed_time=""
   if [ -n "$start_time" ]; then
@@ -2728,12 +2720,15 @@ tui_show_summary() {
     tput bel
   fi
   
-  # Build summary message
-  local summary="ServerCozy Setup Complete${elapsed_time}\n\n"
-  summary+="The following improvements have been made:\n\n"
+  # Clear the screen
+  clear
+  
+  # Print summary directly to terminal
+  echo -e "\n${BOLD}${GREEN}=== ServerCozy Setup Complete${elapsed_time} ===${NC}"
+  echo -e "${BOLD}The following improvements have been made:${NC}"
   
   # Installed tools
-  summary+="Installed Tools:\n"
+  echo -e "\n${BOLD}Installed Tools:${NC}"
   local all_tools=("${ESSENTIAL_TOOLS[@]}" "${RECOMMENDED_TOOLS[@]}" "${ADVANCED_TOOLS[@]}")
   local installed_count=0
   
@@ -2745,7 +2740,7 @@ tui_show_summary() {
     IFS=':' read -r pkg desc <<< "$tool"
     # Check for installation without triggering debug logs
     if command -v "$pkg" &>/dev/null || grep -q "ii  $pkg " <<< "$(dpkg -l 2>/dev/null)" || type "$pkg" &>/dev/null; then
-      summary+="  ✓ $pkg - $desc\n"
+      echo -e "  ${GREEN}✓${NC} $pkg - $desc"
       installed_count=$((installed_count+1))
     fi
   done
@@ -2754,35 +2749,34 @@ tui_show_summary() {
   LOG_DEBUG="$LOG_DEBUG_TEMP"
   
   if [ $installed_count -eq 0 ]; then
-    summary+="  No tools were installed.\n"
+    echo -e "  ${YELLOW}No tools were installed.${NC}"
   fi
   
   # Shell customizations
-  summary+="\nShell Customizations:\n"
+  echo -e "\n${BOLD}Shell Customizations:${NC}"
   if [ "$CONFIGURE_PROMPT" = true ]; then
-    summary+="  ✓ Custom prompt installed\n"
+    echo -e "  ${GREEN}✓${NC} Custom prompt installed"
   fi
   if [ "$CONFIGURE_ALIASES" = true ]; then
-    summary+="  ✓ Useful aliases configured\n"
+    echo -e "  ${GREEN}✓${NC} Useful aliases configured"
   fi
   if [ "$CONFIGURE_VIM" = true ]; then
-    summary+="  ✓ Vim configured\n"
+    echo -e "  ${GREEN}✓${NC} Vim configured"
   fi
   if [ "$INSTALL_NERD_FONT" = true ]; then
-    summary+="  ✓ JetBrainsMono Nerd Font installed\n"
+    echo -e "  ${GREEN}✓${NC} JetBrainsMono Nerd Font installed"
   fi
   
-  summary+="\nTo apply all changes, either:\n"
-  summary+="  1. Log out and log back in\n"
-  summary+="  2. Run: source ~/.bashrc (or ~/.zshrc if using zsh)\n\n"
-  summary+="For more information, type: help\n"
-  summary+="Log file saved to: $LOG_FILE"
+  echo -e "\n${BOLD}${CYAN}To apply all changes, either:${NC}"
+  echo -e "  ${YELLOW}1. Log out and log back in${NC}"
+  echo -e "  ${YELLOW}2. Run: source ~/.bashrc (or ~/.zshrc if using zsh)${NC}"
   
-  dialog --colors \
-         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
-         --title "\Z1Installation Summary\Zn" \
-         --msgbox "\n$summary\n" \
-         $dialog_height $dialog_width
+  echo -e "\n${BOLD}${CYAN}For more information, type:${NC} ${YELLOW}help${NC}"
+  echo -e "${GRAY}Log file saved to: $LOG_FILE${NC}"
+  
+  # Ask user to press Enter to finish
+  echo -e "\n${YELLOW}Press Enter to finish installation...${NC}"
+  read -p ""
   
   return 0
 }
