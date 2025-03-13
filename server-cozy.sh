@@ -2478,57 +2478,56 @@ tui_install_packages() {
   [ "$CONFIGURE_VIM" = true ] && total_operations=$((total_operations + 1))
   [ "$CONFIGURE_ALIASES" = true ] && total_operations=$((total_operations + 1))
   total_operations=$((total_operations + 1)) # For shell prompt configuration
+  total_operations=$((total_operations + 1)) # For special package handling
   
-  # Create a named pipe for progress updates
-  local pipe="/tmp/servercozy_progress_pipe"
-  rm -f "$pipe"
-  mkfifo "$pipe"
-  
-  # Start dialog gauge in background
-  dialog --colors \
-         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
-         --title "\Z1Installation Progress\Zn" \
-         --gauge "\nPreparing installation...\n" \
-         $dialog_height $dialog_width 0 < "$pipe" &
-  local dialog_pid=$!
+  # Ensure at least one operation to avoid division by zero
+  [ $total_operations -eq 0 ] && total_operations=1
   
   # Function to update progress
   update_gauge() {
     local percent="$1"
     local message="$2"
-    echo "$percent"
-    echo "XXX"
-    echo -e "\n$message\n"
-    echo "XXX"
+    
+    # Display progress directly using dialog
+    dialog --colors \
+           --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+           --title "\Z1Installation Progress\Zn" \
+           --gauge "\n$message\n" \
+           $dialog_height $dialog_width "$percent"
   }
   
   # Install packages with progress updates
   local current=0
+  
+  # Initial progress
+  update_gauge 0 "Preparing installation..."
   
   for tool in "${SELECTED_PACKAGES[@]}"; do
     IFS=':' read -r pkg desc <<< "$tool"
     current=$((current + 1))
     local percent=$((current * 100 / total_operations))
     
-    update_gauge "$percent" "Installing: $pkg - $desc" > "$pipe"
+    update_gauge "$percent" "Installing: $pkg - $desc"
     install_package "$pkg" "$desc"
   done
   
   # Handle special package cases
-  update_gauge "$percent" "Handling special package cases..." > "$pipe"
+  current=$((current + 1))
+  percent=$((current * 100 / total_operations))
+  update_gauge "$percent" "Handling special package cases..."
   handle_special_packages
   
   # Configure shell prompt
   current=$((current + 1))
   percent=$((current * 100 / total_operations))
-  update_gauge "$percent" "Configuring shell prompt..." > "$pipe"
+  update_gauge "$percent" "Configuring shell prompt..."
   configure_prompt
   
   # Install Nerd Font if selected
   if [ "$INSTALL_NERD_FONT" = true ]; then
     current=$((current + 1))
     percent=$((current * 100 / total_operations))
-    update_gauge "$percent" "Installing JetBrainsMono Nerd Font..." > "$pipe"
+    update_gauge "$percent" "Installing JetBrainsMono Nerd Font..."
     install_nerd_font
   fi
   
@@ -2536,7 +2535,7 @@ tui_install_packages() {
   if [ "$CONFIGURE_VIM" = true ]; then
     current=$((current + 1))
     percent=$((current * 100 / total_operations))
-    update_gauge "$percent" "Configuring Vim..." > "$pipe"
+    update_gauge "$percent" "Configuring Vim..."
     configure_vim
   fi
   
@@ -2544,17 +2543,13 @@ tui_install_packages() {
   if [ "$CONFIGURE_ALIASES" = true ]; then
     current=$((current + 1))
     percent=$((current * 100 / total_operations))
-    update_gauge "$percent" "Configuring useful aliases..." > "$pipe"
+    update_gauge "$percent" "Configuring useful aliases..."
     configure_aliases
   fi
   
   # Complete
-  update_gauge "100" "Installation complete!" > "$pipe"
+  update_gauge 100 "Installation complete!"
   sleep 1
-  
-  # Clean up
-  rm -f "$pipe"
-  wait $dialog_pid 2>/dev/null
   
   return 0
 }
