@@ -2002,37 +2002,15 @@ check_dialog() {
     return 0
   fi
   
-  if command -v dialog &>/dev/null; then
-    # Check if dialog actually works by running a simple test
-    if dialog --version >/dev/null 2>&1; then
-      # Further test if dialog can create a UI
-      if echo "test" | dialog --inputbox "Testing dialog..." 8 40 2>/dev/null; then
-        log "SUCCESS" "Dialog utility found and working properly."
-        DIALOG_AVAILABLE=true
-        return 0
-      else
-        log "WARNING" "Dialog command found but not working properly in this environment."
-        DIALOG_AVAILABLE=false
-      fi
-    else
-      log "WARNING" "Dialog command found but not functioning."
-      DIALOG_AVAILABLE=false
-    fi
-  else
-    log "INFO" "Dialog utility not found."
-    DIALOG_AVAILABLE=false
-  fi
-  
-  # If we get here, either dialog is not installed or not working
-  echo -e "\n${YELLOW}${BOLD}Dialog TUI not available${NC}"
-  echo -e "Falling back to text-based interface."
-  echo -e "This may be due to terminal limitations or SSH connection settings."
-  echo
-  
-  # Ask if user wants to install dialog only if it's not installed
+  # First check if dialog is installed
   if ! command -v dialog &>/dev/null; then
+    log "INFO" "Dialog utility not found."
+    
+    # Ask if user wants to install dialog
+    echo -e "\n${YELLOW}${BOLD}Dialog utility not found${NC}"
+    echo -e "Dialog is recommended for a better user interface experience."
     echo -e "Would you like to install dialog? (y/n)"
-    echo -e "1. ${GREEN}Yes${NC} - Install dialog (might still not work in this environment)"
+    echo -e "1. ${GREEN}Yes${NC} - Install dialog (recommended)"
     echo -e "2. ${YELLOW}No${NC}  - Continue with basic text interface"
     
     read -p "> " install_dialog
@@ -2060,23 +2038,48 @@ check_dialog() {
           run_with_privileges pkg install -y dialog
           ;;
       esac
-      
-      # Check again if dialog works after installation
-      if command -v dialog &>/dev/null && dialog --version >/dev/null 2>&1; then
-        if echo "test" | dialog --inputbox "Testing dialog..." 8 40 2>/dev/null; then
-          log "SUCCESS" "Dialog installed and working successfully."
-          DIALOG_AVAILABLE=true
-          return 0
-        fi
-      fi
-      
-      log "WARNING" "Dialog installed but not working in this environment. Using text-based interface."
-      DIALOG_AVAILABLE=false
     else
       log "INFO" "Continuing without dialog. Using text-based interface."
       DIALOG_AVAILABLE=false
+      return 0
     fi
   fi
+  
+  # Now check if dialog works properly
+  if command -v dialog &>/dev/null; then
+    # Simple test to see if dialog works at all
+    if ! dialog --version >/dev/null 2>&1; then
+      log "WARNING" "Dialog command found but not functioning."
+      DIALOG_AVAILABLE=false
+      return 0
+    fi
+    
+    # Create a test file for dialog output
+    local test_file=$(mktemp)
+    
+    # Try to display a simple message box
+    if dialog --clear --title "Testing Dialog" --msgbox "Testing if dialog works in this environment..." 8 60 2>"$test_file"; then
+      log "SUCCESS" "Dialog utility found and working properly."
+      DIALOG_AVAILABLE=true
+      rm -f "$test_file"
+      return 0
+    else
+      log "WARNING" "Dialog command found but not working properly in this environment."
+      DIALOG_AVAILABLE=false
+      rm -f "$test_file"
+      
+      echo -e "\n${YELLOW}${BOLD}Dialog TUI not working properly${NC}"
+      echo -e "Falling back to text-based interface."
+      echo -e "This may be due to terminal limitations or SSH connection settings."
+      echo
+      sleep 2
+      return 0
+    fi
+  fi
+  
+  # If we get here, dialog is not available
+  DIALOG_AVAILABLE=false
+  return 0
 }
 
 # Function to check privileges and set up the appropriate command
@@ -2505,16 +2508,8 @@ tui_install_packages() {
   # Ensure at least one operation to avoid division by zero
   [ $total_operations -eq 0 ] && total_operations=1
   
-  # Create a temporary file for progress updates
-  local progress_file=$(mktemp)
-  local message_file=$(mktemp)
-  
-  # Initialize progress files
-  echo "0" > "$progress_file"
-  echo "Preparing installation..." > "$message_file"
-  
-  # Save original stdout/stderr
-  exec 3>&1 4>&2
+  # Create a temporary file for installation logs
+  local install_log=$(mktemp)
   
   # Function to update progress
   update_progress_gauge() {
@@ -2522,46 +2517,25 @@ tui_install_packages() {
     local message="$2"
     local percent=$((current * 100 / total_operations))
     
-    # Update the progress file
-    echo "$percent" > "$progress_file"
-    echo "$message" > "$message_file"
-    
     # Log the progress to the log file only
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] [INFO] Installation progress: $percent% - $message" >> "$LOG_FILE"
+    
+    # Update the gauge display directly
+    echo $percent | dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+                          --title "Installation Progress" \
+                          --gauge "$message" 10 70 0
   }
   
-  # Start the background process to display the gauge
-  (
-    while true; do
-      # Read current progress
-      [ -f "$progress_file" ] && percent=$(cat "$progress_file")
-      [ -f "$message_file" ] && message=$(cat "$message_file")
-      
-      # Display the gauge percentage and message
-      echo "$percent"
-      echo "XXX"
-      echo "$message"
-      echo "XXX"
-      
-      # Sleep briefly to reduce CPU usage
-      sleep 0.2
-      
-      # Exit if we've reached 100% or files are gone
-      [ ! -f "$progress_file" ] && break
-      [ "$percent" -ge 100 ] && break
-    done
-  ) | dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
-             --title "Installation Progress" \
-             --gauge "" 10 70 0
-  
   # Redirect stdout/stderr to log file for installation operations
-  exec 1>>$LOG_FILE 2>>$LOG_FILE
+  exec 3>&1 4>&2
+  exec 1>>"$install_log" 2>>"$install_log"
   
   # Install packages with progress updates
   local current=0
   
   # Initial progress
   update_progress_gauge "$current" "Preparing installation..."
+  sleep 1
   
   # Install selected packages
   for tool in "${SELECTED_PACKAGES[@]}"; do
@@ -2612,8 +2586,14 @@ tui_install_packages() {
   # Restore original stdout/stderr
   exec 1>&3 2>&4
   
+  # Append installation log to main log
+  cat "$install_log" >> "$LOG_FILE"
+  
   # Clean up
-  rm -f "$progress_file" "$message_file"
+  rm -f "$install_log"
+  
+  # Clear the screen to remove any leftover dialog artifacts
+  clear
   
   return 0
 }
