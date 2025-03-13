@@ -2234,48 +2234,46 @@ show_prerequisites_screen() {
   [ $dialog_height -lt 20 ] && dialog_height=20
   [ $dialog_width -lt 75 ] && dialog_width=75
   
-  # Create a temporary file to redirect output during system checks
-  local prereq_log=$(mktemp)
+  # Set up logging
+  echo "=== ServerCozy Log $(date) ===" > "$LOG_FILE"
   
-  # Redirect all output to the temporary log file
-  {
-    # Set up logging
-    echo "=== ServerCozy Log $(date) ===" > "$LOG_FILE"
-    
-    # Check for privileges (sudo/doas)
-    update_progress "Checking for privileged access"
-    check_sudo
-    
-    # Detect operating system
-    update_progress "Detecting operating system"
-    detect_os
-    
-    # Detect architecture
-    update_progress "Detecting system architecture"
-    detect_arch
-    
-    # Check connectivity
-    update_progress "Checking internet connectivity"
-    check_connectivity
-    
-    # Update package repositories
-    update_progress "Updating package repositories"
-    update_package_repos
-    
-    # Check for dialog availability
-    update_progress "Checking for dialog utility"
-    check_dialog
-    
-    # Handle macOS specific setup if needed
-    if [ "$OS_TYPE" = "macos" ]; then
-      update_progress "Setting up macOS environment"
-      setup_macos
-    fi
-  } > "$prereq_log" 2>&1
+  # Temporarily redirect stdout to log file for system checks
+  # but keep stderr to terminal for any critical errors
+  exec 3>&1
+  exec 1>>$LOG_FILE
   
-  # Append the captured output to our log file
-  cat "$prereq_log" >> "$LOG_FILE"
-  rm -f "$prereq_log"
+  # Check for privileges (sudo/doas)
+  update_progress "Checking for privileged access"
+  check_sudo
+  
+  # Detect operating system
+  update_progress "Detecting operating system"
+  detect_os
+  
+  # Detect architecture
+  update_progress "Detecting system architecture"
+  detect_arch
+  
+  # Check connectivity
+  update_progress "Checking internet connectivity"
+  check_connectivity
+  
+  # Update package repositories
+  update_progress "Updating package repositories"
+  update_package_repos
+  
+  # Check for dialog availability
+  update_progress "Checking for dialog utility"
+  check_dialog
+  
+  # Handle macOS specific setup if needed
+  if [ "$OS_TYPE" = "macos" ]; then
+    update_progress "Setting up macOS environment"
+    setup_macos
+  fi
+  
+  # Restore stdout
+  exec 1>&3
   
   # Create system info message
   local system_info="System Information:\n"
@@ -2487,15 +2485,13 @@ tui_install_packages() {
   # Create a temporary file for progress updates
   local progress_file=$(mktemp)
   local message_file=$(mktemp)
-  local log_redirect=$(mktemp)
   
   # Initialize progress files
   echo "0" > "$progress_file"
   echo "Preparing installation..." > "$message_file"
   
-  # Temporarily redirect all output to our log file
+  # Save original stdout/stderr
   exec 3>&1 4>&2
-  exec 1>"$log_redirect" 2>&1
   
   # Function to update progress
   update_progress_gauge() {
@@ -2507,15 +2503,12 @@ tui_install_packages() {
     echo "$percent" > "$progress_file"
     echo "$message" > "$message_file"
     
-    # Log the progress (to the redirected output)
-    log "INFO" "Installation progress: $percent% - $message"
+    # Log the progress to the log file only
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [INFO] Installation progress: $percent% - $message" >> "$LOG_FILE"
   }
   
   # Start the background process to display the gauge
   (
-    # Restore original stdout/stderr for dialog
-    exec 1>&3 2>&4
-    
     while true; do
       # Read current progress
       [ -f "$progress_file" ] && percent=$(cat "$progress_file")
@@ -2537,6 +2530,9 @@ tui_install_packages() {
   ) | dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
              --title "Installation Progress" \
              --gauge "" 10 70 0
+  
+  # Redirect stdout/stderr to log file for installation operations
+  exec 1>>$LOG_FILE 2>>$LOG_FILE
   
   # Install packages with progress updates
   local current=0
@@ -2593,11 +2589,8 @@ tui_install_packages() {
   # Restore original stdout/stderr
   exec 1>&3 2>&4
   
-  # Append our captured output to the log file
-  cat "$log_redirect" >> "$LOG_FILE"
-  
   # Clean up
-  rm -f "$progress_file" "$message_file" "$log_redirect"
+  rm -f "$progress_file" "$message_file"
   
   return 0
 }
@@ -2711,22 +2704,13 @@ main() {
     exit 1
   fi
   
-  # Create a temporary file to redirect output during TUI operations
-  local tui_log=$(mktemp)
-  
-  # TUI workflow - redirect all output to log file during TUI operations
-  {
-    show_welcome_screen
-    show_prerequisites_screen
-    tui_select_packages
-    tui_configure_options
-    tui_install_packages
-    tui_show_summary
-  } >> "$tui_log" 2>&1
-  
-  # Append the captured output to our log file
-  cat "$tui_log" >> "$LOG_FILE"
-  rm -f "$tui_log"
+  # TUI workflow
+  show_welcome_screen
+  show_prerequisites_screen
+  tui_select_packages
+  tui_configure_options
+  tui_install_packages
+  tui_show_summary
   
   log "SUCCESS" "Installation completed successfully!"
 }
