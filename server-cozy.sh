@@ -2461,16 +2461,8 @@ tui_configure_options() {
   return 0
 }
 
-# Function to show installation progress using text-based display
+# Function to show installation progress using dialog gauge
 tui_install_packages() {
-  # Clear the screen
-  clear
-  
-  # Print header
-  echo -e "\n${BOLD}${CYAN}ServerCozy v${SCRIPT_VERSION}${NC}"
-  echo -e "${BOLD}${CYAN}=============================${NC}\n"
-  echo -e "${BOLD}Installation Progress:${NC}\n"
-  
   # Count total operations
   local total_operations=${#SELECTED_PACKAGES[@]}
   [ "$INSTALL_NERD_FONT" = true ] && total_operations=$((total_operations + 1))
@@ -2482,81 +2474,110 @@ tui_install_packages() {
   # Ensure at least one operation to avoid division by zero
   [ $total_operations -eq 0 ] && total_operations=1
   
+  # Create a temporary file for progress updates
+  local progress_file=$(mktemp)
+  local message_file=$(mktemp)
+  
+  # Initialize progress files
+  echo "0" > "$progress_file"
+  echo "Preparing installation..." > "$message_file"
+  
   # Function to update progress
-  update_progress_display() {
+  update_progress_gauge() {
     local current="$1"
-    local total="$2"
-    local message="$3"
-    local percent=$((current * 100 / total))
+    local message="$2"
+    local percent=$((current * 100 / total_operations))
     
-    # Calculate progress bar width (50 characters)
-    local bar_width=50
-    local filled_width=$((percent * bar_width / 100))
-    local empty_width=$((bar_width - filled_width))
+    # Update the progress file
+    echo "$percent" > "$progress_file"
+    echo "$message" > "$message_file"
     
-    # Create the progress bar
-    local progress_bar="["
-    for ((i=0; i<filled_width; i++)); do
-      progress_bar+="#"
-    done
-    for ((i=0; i<empty_width; i++)); do
-      progress_bar+=" "
-    done
-    progress_bar+="]"
-    
-    # Clear previous line and print new progress
-    echo -ne "\r\033[K${BLUE}$progress_bar${NC} ${percent}% - ${message}"
+    # Log the progress
+    log "INFO" "Installation progress: $percent% - $message"
   }
+  
+  # Start the background process to display the gauge
+  (
+    while true; do
+      # Read current progress
+      [ -f "$progress_file" ] && percent=$(cat "$progress_file")
+      [ -f "$message_file" ] && message=$(cat "$message_file")
+      
+      # Display the gauge percentage and message
+      echo "$percent"
+      echo "XXX"
+      echo "$message"
+      echo "XXX"
+      
+      # Sleep briefly to reduce CPU usage
+      sleep 0.2
+      
+      # Exit if we've reached 100% or files are gone
+      [ ! -f "$progress_file" ] && break
+      [ "$percent" -ge 100 ] && break
+    done
+  ) | dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+             --title "Installation Progress" \
+             --gauge "" 10 70 0 &
+  
+  # Store the background process ID
+  local gauge_pid=$!
   
   # Install packages with progress updates
   local current=0
   
   # Initial progress
-  update_progress_display "$current" "$total_operations" "Preparing installation..."
+  update_progress_gauge "$current" "Preparing installation..."
   
+  # Install selected packages
   for tool in "${SELECTED_PACKAGES[@]}"; do
     IFS=':' read -r pkg desc <<< "$tool"
     current=$((current + 1))
     
-    update_progress_display "$current" "$total_operations" "Installing: $pkg - $desc"
-    install_package "$pkg" "$desc"
+    update_progress_gauge "$current" "Installing: $pkg - $desc"
+    # Redirect output to log file instead of terminal
+    install_package "$pkg" "$desc" >> "$LOG_FILE" 2>&1
   done
   
   # Handle special package cases
   current=$((current + 1))
-  update_progress_display "$current" "$total_operations" "Handling special package cases..."
-  handle_special_packages
+  update_progress_gauge "$current" "Handling special package cases..."
+  handle_special_packages >> "$LOG_FILE" 2>&1
   
   # Configure shell prompt
   current=$((current + 1))
-  update_progress_display "$current" "$total_operations" "Configuring shell prompt..."
-  configure_prompt
+  update_progress_gauge "$current" "Configuring shell prompt..."
+  configure_prompt >> "$LOG_FILE" 2>&1
   
   # Install Nerd Font if selected
   if [ "$INSTALL_NERD_FONT" = true ]; then
     current=$((current + 1))
-    update_progress_display "$current" "$total_operations" "Installing JetBrainsMono Nerd Font..."
-    install_nerd_font
+    update_progress_gauge "$current" "Installing JetBrainsMono Nerd Font..."
+    install_nerd_font >> "$LOG_FILE" 2>&1
   fi
   
   # Configure Vim if selected
   if [ "$CONFIGURE_VIM" = true ]; then
     current=$((current + 1))
-    update_progress_display "$current" "$total_operations" "Configuring Vim..."
-    configure_vim
+    update_progress_gauge "$current" "Configuring Vim..."
+    configure_vim >> "$LOG_FILE" 2>&1
   fi
   
   # Configure aliases if selected
   if [ "$CONFIGURE_ALIASES" = true ]; then
     current=$((current + 1))
-    update_progress_display "$current" "$total_operations" "Configuring useful aliases..."
-    configure_aliases
+    update_progress_gauge "$current" "Configuring useful aliases..."
+    configure_aliases >> "$LOG_FILE" 2>&1
   fi
   
   # Complete
-  update_progress_display "$total_operations" "$total_operations" "Installation complete!"
-  echo -e "\n\n${GREEN}${BOLD}Installation completed successfully!${NC}\n"
+  update_progress_gauge "$total_operations" "Installation complete!"
+  
+  # Wait for gauge to reach 100%
   sleep 2
+  
+  # Clean up
+  rm -f "$progress_file" "$message_file"
   
   return 0
 }
