@@ -2003,56 +2003,79 @@ check_dialog() {
   fi
   
   if command -v dialog &>/dev/null; then
-    log "SUCCESS" "Dialog utility found."
-    DIALOG_AVAILABLE=true
-    return 0
-  fi
-  
-  # Dialog not installed, ask user what to do
-  echo -e "\n${YELLOW}${BOLD}Dialog utility not found${NC}"
-  echo -e "Dialog is recommended for a better user interface experience."
-  echo -e "It provides a full-screen menu with arrow key navigation and space key selection."
-  echo
-  echo -e "Would you like to install dialog? (y/n)"
-  echo -e "1. ${GREEN}Yes${NC} - Install dialog (recommended)"
-  echo -e "2. ${YELLOW}No${NC}  - Continue with basic text interface"
-  
-  read -p "> " install_dialog
-  
-  if [[ "$install_dialog" =~ ^[Yy]|1$ ]]; then
-    log "INFO" "Installing dialog..."
-    
-    case $PKG_MANAGER in
-      apt)
-        run_with_privileges apt install -y dialog
-        ;;
-      dnf|yum)
-        run_with_privileges $PKG_MANAGER install -y dialog
-        ;;
-      apk)
-        run_with_privileges apk add dialog
-        ;;
-      brew)
-        brew install dialog
-        ;;
-      pacman)
-        run_with_privileges pacman -S --noconfirm dialog
-        ;;
-      pkg)
-        run_with_privileges pkg install -y dialog
-        ;;
-    esac
-    
-    if command -v dialog &>/dev/null; then
-      log "SUCCESS" "Dialog installed successfully."
-      DIALOG_AVAILABLE=true
+    # Check if dialog actually works by running a simple test
+    if dialog --version >/dev/null 2>&1; then
+      # Further test if dialog can create a UI
+      if echo "test" | dialog --inputbox "Testing dialog..." 8 40 2>/dev/null; then
+        log "SUCCESS" "Dialog utility found and working properly."
+        DIALOG_AVAILABLE=true
+        return 0
+      else
+        log "WARNING" "Dialog command found but not working properly in this environment."
+        DIALOG_AVAILABLE=false
+      fi
     else
-      log "WARNING" "Failed to install dialog. Falling back to text-based interface."
+      log "WARNING" "Dialog command found but not functioning."
       DIALOG_AVAILABLE=false
     fi
   else
-    log "INFO" "Continuing without dialog. Using text-based interface."
+    log "INFO" "Dialog utility not found."
     DIALOG_AVAILABLE=false
+  fi
+  
+  # If we get here, either dialog is not installed or not working
+  echo -e "\n${YELLOW}${BOLD}Dialog TUI not available${NC}"
+  echo -e "Falling back to text-based interface."
+  echo -e "This may be due to terminal limitations or SSH connection settings."
+  echo
+  
+  # Ask if user wants to install dialog only if it's not installed
+  if ! command -v dialog &>/dev/null; then
+    echo -e "Would you like to install dialog? (y/n)"
+    echo -e "1. ${GREEN}Yes${NC} - Install dialog (might still not work in this environment)"
+    echo -e "2. ${YELLOW}No${NC}  - Continue with basic text interface"
+    
+    read -p "> " install_dialog
+    
+    if [[ "$install_dialog" =~ ^[Yy]|1$ ]]; then
+      log "INFO" "Installing dialog..."
+      
+      case $PKG_MANAGER in
+        apt)
+          run_with_privileges apt install -y dialog
+          ;;
+        dnf|yum)
+          run_with_privileges $PKG_MANAGER install -y dialog
+          ;;
+        apk)
+          run_with_privileges apk add dialog
+          ;;
+        brew)
+          brew install dialog
+          ;;
+        pacman)
+          run_with_privileges pacman -S --noconfirm dialog
+          ;;
+        pkg)
+          run_with_privileges pkg install -y dialog
+          ;;
+      esac
+      
+      # Check again if dialog works after installation
+      if command -v dialog &>/dev/null && dialog --version >/dev/null 2>&1; then
+        if echo "test" | dialog --inputbox "Testing dialog..." 8 40 2>/dev/null; then
+          log "SUCCESS" "Dialog installed and working successfully."
+          DIALOG_AVAILABLE=true
+          return 0
+        fi
+      fi
+      
+      log "WARNING" "Dialog installed but not working in this environment. Using text-based interface."
+      DIALOG_AVAILABLE=false
+    else
+      log "INFO" "Continuing without dialog. Using text-based interface."
+      DIALOG_AVAILABLE=false
+    fi
   fi
 }
 
@@ -2675,7 +2698,94 @@ tui_show_summary() {
   return 0
 }
 
-# Main function with TUI workflow
+# Function to run the text-based interface workflow
+run_text_interface() {
+  echo -e "\n${BOLD}${CYAN}=== ServerCozy v${SCRIPT_VERSION} ===${NC}"
+  echo -e "This script enhances your server environment with useful tools and configurations."
+  
+  # Check prerequisites
+  echo -e "\n${BOLD}${CYAN}Checking system prerequisites...${NC}"
+  
+  # Redirect stdout to log file for system checks
+  exec 3>&1
+  exec 1>>$LOG_FILE
+  
+  # Check for privileges (sudo/doas)
+  update_progress "Checking for privileged access"
+  check_sudo
+  
+  # Detect operating system
+  update_progress "Detecting operating system"
+  detect_os
+  
+  # Detect architecture
+  update_progress "Detecting system architecture"
+  detect_arch
+  
+  # Check connectivity
+  update_progress "Checking internet connectivity"
+  check_connectivity
+  
+  # Update package repositories
+  update_progress "Updating package repositories"
+  update_package_repos
+  
+  # Restore stdout
+  exec 1>&3
+  
+  # Display system info
+  echo -e "\n${BOLD}System Information:${NC}"
+  echo -e "- Operating System: ${OS_NAME} ${OS_VERSION}"
+  echo -e "- Architecture: ${ARCH_TYPE}"
+  echo -e "- Package Manager: ${PKG_MANAGER}"
+  echo -e "- Internet Connectivity: $(check_connectivity > /dev/null 2>&1 && echo "Available" || echo "Limited/Not Available")"
+  echo -e "- Privileged Access: $([ -n "$SUDO_CMD" ] && echo "Available (${SUDO_CMD})" || echo "Not Available")"
+  
+  # Package selection
+  echo -e "\n${BOLD}${CYAN}Select packages to install:${NC}"
+  select_packages
+  
+  # Configure options
+  configure_nerd_font
+  ask_configure_vim
+  ask_configure_aliases
+  
+  # Install packages and configure
+  echo -e "\n${BOLD}${CYAN}Installing selected packages and configuring system...${NC}"
+  
+  # Redirect stdout/stderr to log file for installation
+  exec 3>&1 4>&2
+  exec 1>>$LOG_FILE 2>>$LOG_FILE
+  
+  # Configure shell prompt
+  configure_prompt
+  
+  # Install Nerd Font if selected
+  if [ "$INSTALL_NERD_FONT" = true ]; then
+    install_nerd_font
+  fi
+  
+  # Configure Vim if selected
+  if [ "$CONFIGURE_VIM" = true ]; then
+    configure_vim
+  fi
+  
+  # Configure aliases if selected
+  if [ "$CONFIGURE_ALIASES" = true ]; then
+    configure_aliases
+  fi
+  
+  # Handle special package cases
+  handle_special_packages
+  
+  # Restore stdout/stderr
+  exec 1>&3 2>&4
+  
+  # Show summary
+  show_summary
+}
+
+# Main function with workflow selection
 main() {
   # Store start time for elapsed time calculation
   local start_time=$(date +%s)
@@ -2690,27 +2800,22 @@ main() {
   # Set up logging
   echo "=== ServerCozy Log $(date) ===" > "$LOG_FILE"
   
-  # Check if dialog is available
-  if ! command -v dialog &>/dev/null; then
-    echo -e "${YELLOW}${BOLD}Dialog utility not found${NC}"
-    echo -e "This script requires the dialog utility for the TUI interface."
-    echo -e "Please install dialog and run the script again."
-    echo
-    echo -e "You can install dialog with one of the following commands:"
-    echo -e "  - Debian/Ubuntu: sudo apt install dialog"
-    echo -e "  - Fedora/RHEL: sudo dnf install dialog"
-    echo -e "  - Arch Linux: sudo pacman -S dialog"
-    echo -e "  - macOS: brew install dialog"
-    exit 1
-  fi
+  # Check for dialog availability
+  check_dialog
   
-  # TUI workflow
-  show_welcome_screen
-  show_prerequisites_screen
-  tui_select_packages
-  tui_configure_options
-  tui_install_packages
-  tui_show_summary
+  # Choose workflow based on dialog availability
+  if [ "$DIALOG_AVAILABLE" = true ]; then
+    # TUI workflow
+    show_welcome_screen
+    show_prerequisites_screen
+    tui_select_packages
+    tui_configure_options
+    tui_install_packages
+    tui_show_summary
+  else
+    # Text-based interface
+    run_text_interface
+  fi
   
   log "SUCCESS" "Installation completed successfully!"
 }
