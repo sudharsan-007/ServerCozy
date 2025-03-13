@@ -1653,8 +1653,8 @@ ask_configure_vim() {
     
     dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
            --title "Vim Configuration" \
-           --yesno "Configure Vim with enhanced settings?\n\nThis will create a .vimrc file with useful defaults." \
            --defaultno \
+           --yesno "Configure Vim with enhanced settings?\n\nThis will create a .vimrc file with useful defaults." \
            10 60 2> "$temp_file"
     
     local result=$?
@@ -1705,8 +1705,8 @@ ask_configure_aliases() {
     
     dialog --backtitle "ServerCozy v${SCRIPT_VERSION}" \
            --title "Aliases Configuration" \
-           --yesno "Configure useful command aliases?\n\nThis will create alias shortcuts for commonly used commands." \
            --defaultno \
+           --yesno "Configure useful command aliases?\n\nThis will create alias shortcuts for commonly used commands." \
            10 60 2> "$temp_file"
     
     local result=$?
