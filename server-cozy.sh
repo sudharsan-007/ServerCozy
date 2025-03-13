@@ -2203,22 +2203,36 @@ setup_macos() {
   return 0
 }
 
-# Main function
-main() {
-  # Store start time for elapsed time calculation
-  local start_time=$(date +%s)
+# Function to create a dialog-based welcome screen
+show_welcome_screen() {
+  local term_height=$(tput lines)
+  local term_width=$(tput cols)
+  local dialog_height=$((term_height * 3 / 4))
+  local dialog_width=$((term_width * 3 / 4))
   
-  # Check lock file to prevent multiple instances
-  check_lock
+  # Ensure minimum dimensions
+  [ $dialog_height -lt 20 ] && dialog_height=20
+  [ $dialog_width -lt 75 ] && dialog_width=75
   
-  # Check if script is executable
-  update_progress "Checking script permissions"
-  check_executable
-  # Display banner
-  echo -e "${BLUE}${BOLD}===========================================================${NC}"
-  echo -e "${BLUE}${BOLD}           ServerCozy v${SCRIPT_VERSION}            ${NC}"
-  echo -e "${BLUE}${BOLD}===========================================================${NC}"
-  echo
+  dialog --colors \
+         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "\Z1Welcome to ServerCozy\Zn" \
+         --msgbox "\n\Z1ServerCozy v${SCRIPT_VERSION}\Zn\n\nThis script enhances a cloud server environment with useful tools and configurations.\nIt automates the installation of common utilities, shell improvements, and productivity tools.\n\nAuthor: Sudharsan Ananth\n\n\Z4Page 1/6\Zn" \
+         $dialog_height $dialog_width
+  
+  return $?
+}
+
+# Function to check prerequisites and show system information
+show_prerequisites_screen() {
+  local term_height=$(tput lines)
+  local term_width=$(tput cols)
+  local dialog_height=$((term_height * 3 / 4))
+  local dialog_width=$((term_width * 3 / 4))
+  
+  # Ensure minimum dimensions
+  [ $dialog_height -lt 20 ] && dialog_height=20
+  [ $dialog_width -lt 75 ] && dialog_width=75
   
   # Set up logging
   echo "=== ServerCozy Log $(date) ===" > "$LOG_FILE"
@@ -2226,6 +2240,7 @@ main() {
   # Check for privileges (sudo/doas)
   update_progress "Checking for privileged access"
   check_sudo
+  
   # Detect operating system
   update_progress "Detecting operating system"
   detect_os
@@ -2233,16 +2248,6 @@ main() {
   # Detect architecture
   update_progress "Detecting system architecture"
   detect_arch
-  
-  # Check for updates to the script
-  update_progress "Checking for script updates"
-  check_for_updates
-  
-  # Handle macOS specific setup if needed
-  if [ "$OS_TYPE" = "macos" ]; then
-    update_progress "Setting up macOS environment"
-    setup_macos
-  fi
   
   # Check connectivity
   update_progress "Checking internet connectivity"
@@ -2256,54 +2261,425 @@ main() {
   update_progress "Checking for dialog utility"
   check_dialog
   
-  # Select and install packages
-  update_progress "Selecting and installing packages"
-  select_packages
-  
-  # Handle special package cases
-  update_progress "Handling special package cases"
-  handle_special_packages
-  
-  # Configure Nerd Font installation
-  update_progress "Configuring Nerd Font installation"
-  configure_nerd_font
-  
-  # Install Nerd Font (skip in user-only mode)
-  if [ "$USER_INSTALL_ONLY" != "true" ]; then
-    update_progress "Installing Nerd Font"
-    install_nerd_font
-  else
-    log "INFO" "Skipping Nerd Font installation in user-only mode."
+  # Handle macOS specific setup if needed
+  if [ "$OS_TYPE" = "macos" ]; then
+    update_progress "Setting up macOS environment"
+    setup_macos
   fi
   
+  # Create system info message
+  local system_info="System Information:\n"
+  system_info+="- Operating System: ${OS_NAME} ${OS_VERSION}\n"
+  system_info+="- Architecture: ${ARCH_TYPE}\n"
+  system_info+="- Package Manager: ${PKG_MANAGER}\n"
+  system_info+="- Internet Connectivity: $(check_connectivity > /dev/null && echo "Available" || echo "Limited/Not Available")\n"
+  system_info+="- Privileged Access: $([ -n "$SUDO_CMD" ] && echo "Available (${SUDO_CMD})" || echo "Not Available")\n"
+  
+  dialog --colors \
+         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "\Z1System Prerequisites\Zn" \
+         --msgbox "\n${system_info}\n\nAll prerequisites have been checked. Ready to proceed with installation.\n\n\Z4Page 2/6\Zn" \
+         $dialog_height $dialog_width
+  
+  return $?
+}
+
+# Function to select packages using dialog
+tui_select_packages() {
+  local term_height=$(tput lines)
+  local term_width=$(tput cols)
+  local dialog_height=$((term_height * 3 / 4))
+  local dialog_width=$((term_width * 3 / 4))
+  local list_height=$((dialog_height - 10))
+  
+  # Ensure minimum dimensions
+  [ $dialog_height -lt 20 ] && dialog_height=20
+  [ $dialog_width -lt 75 ] && dialog_width=75
+  
+  # Clear the global array
+  SELECTED_PACKAGES=()
+  
+  # Arrays to store selected indexes
+  local essential_selected=()
+  local recommended_selected=()
+  local advanced_selected=()
+  
+  # Prepare dialog options for essential tools
+  local essential_options=()
+  for i in "${!ESSENTIAL_TOOLS[@]}"; do
+    IFS=':' read -r item desc <<< "${ESSENTIAL_TOOLS[$i]}"
+    essential_options+=("$item" "$desc" "ON")
+  done
+  
+  # Show essential tools selection
+  dialog --colors \
+         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "\Z1Essential Tools\Zn" \
+         --checklist "\nSelect essential tools to install:\n\n\Z4Page 3/6\Zn" \
+         $dialog_height $dialog_width $list_height \
+         "${essential_options[@]}" 2> /tmp/servercozy_essential
+  
+  # Read selections
+  if [ -f /tmp/servercozy_essential ]; then
+    local selections=$(cat /tmp/servercozy_essential)
+    for selected in $selections; do
+      selected=${selected//\"/}
+      for i in "${!ESSENTIAL_TOOLS[@]}"; do
+        IFS=':' read -r item desc <<< "${ESSENTIAL_TOOLS[$i]}"
+        if [ "$item" = "$selected" ]; then
+          essential_selected+=($i)
+          SELECTED_PACKAGES+=("${ESSENTIAL_TOOLS[$i]}")
+          break
+        fi
+      done
+    done
+    rm -f /tmp/servercozy_essential
+  fi
+  
+  # Prepare dialog options for recommended tools
+  local recommended_options=()
+  for i in "${!RECOMMENDED_TOOLS[@]}"; do
+    IFS=':' read -r item desc <<< "${RECOMMENDED_TOOLS[$i]}"
+    recommended_options+=("$item" "$desc" "ON")
+  done
+  
+  # Show recommended tools selection
+  dialog --colors \
+         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "\Z1Recommended Tools\Zn" \
+         --checklist "\nSelect recommended tools to install:\n\n\Z4Page 4/6\Zn" \
+         $dialog_height $dialog_width $list_height \
+         "${recommended_options[@]}" 2> /tmp/servercozy_recommended
+  
+  # Read selections
+  if [ -f /tmp/servercozy_recommended ]; then
+    local selections=$(cat /tmp/servercozy_recommended)
+    for selected in $selections; do
+      selected=${selected//\"/}
+      for i in "${!RECOMMENDED_TOOLS[@]}"; do
+        IFS=':' read -r item desc <<< "${RECOMMENDED_TOOLS[$i]}"
+        if [ "$item" = "$selected" ]; then
+          recommended_selected+=($i)
+          SELECTED_PACKAGES+=("${RECOMMENDED_TOOLS[$i]}")
+          break
+        fi
+      done
+    done
+    rm -f /tmp/servercozy_recommended
+  fi
+  
+  # Prepare dialog options for advanced tools
+  local advanced_options=()
+  for i in "${!ADVANCED_TOOLS[@]}"; do
+    IFS=':' read -r item desc <<< "${ADVANCED_TOOLS[$i]}"
+    advanced_options+=("$item" "$desc" "OFF")
+  done
+  
+  # Show advanced tools selection
+  dialog --colors \
+         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "\Z1Advanced Tools\Zn" \
+         --checklist "\nSelect advanced tools to install:\n\n\Z4Page 5/6\Zn" \
+         $dialog_height $dialog_width $list_height \
+         "${advanced_options[@]}" 2> /tmp/servercozy_advanced
+  
+  # Read selections
+  if [ -f /tmp/servercozy_advanced ]; then
+    local selections=$(cat /tmp/servercozy_advanced)
+    for selected in $selections; do
+      selected=${selected//\"/}
+      for i in "${!ADVANCED_TOOLS[@]}"; do
+        IFS=':' read -r item desc <<< "${ADVANCED_TOOLS[$i]}"
+        if [ "$item" = "$selected" ]; then
+          advanced_selected+=($i)
+          SELECTED_PACKAGES+=("${ADVANCED_TOOLS[$i]}")
+          break
+        fi
+      done
+    done
+    rm -f /tmp/servercozy_advanced
+  fi
+  
+  return 0
+}
+
+# Function to configure options using dialog
+tui_configure_options() {
+  local term_height=$(tput lines)
+  local term_width=$(tput cols)
+  local dialog_height=$((term_height * 3 / 4))
+  local dialog_width=$((term_width * 3 / 4))
+  local list_height=$((dialog_height - 10))
+  
+  # Ensure minimum dimensions
+  [ $dialog_height -lt 20 ] && dialog_height=20
+  [ $dialog_width -lt 75 ] && dialog_width=75
+  
+  # Prepare dialog options
+  local options=(
+    "nerd_font" "Install JetBrainsMono Nerd Font" "ON"
+    "vim_config" "Configure Vim with enhanced settings" "ON"
+    "aliases" "Configure useful command aliases" "ON"
+  )
+  
+  # Show options selection
+  dialog --colors \
+         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "\Z1Configuration Options\Zn" \
+         --checklist "\nSelect configuration options:\n\n\Z4Page 6/6\Zn" \
+         $dialog_height $dialog_width $list_height \
+         "${options[@]}" 2> /tmp/servercozy_options
+  
+  # Read selections
+  if [ -f /tmp/servercozy_options ]; then
+    local selections=$(cat /tmp/servercozy_options)
+    
+    # Default all to false
+    INSTALL_NERD_FONT=false
+    CONFIGURE_VIM=false
+    CONFIGURE_ALIASES=false
+    
+    # Set selected options to true
+    for selected in $selections; do
+      selected=${selected//\"/}
+      case "$selected" in
+        "nerd_font")
+          INSTALL_NERD_FONT=true
+          ;;
+        "vim_config")
+          CONFIGURE_VIM=true
+          ;;
+        "aliases")
+          CONFIGURE_ALIASES=true
+          ;;
+      esac
+    done
+    
+    rm -f /tmp/servercozy_options
+  fi
+  
+  return 0
+}
+
+# Function to show installation progress using dialog gauge
+tui_install_packages() {
+  local term_height=$(tput lines)
+  local term_width=$(tput cols)
+  local dialog_height=$((term_height * 3 / 4))
+  local dialog_width=$((term_width * 3 / 4))
+  
+  # Ensure minimum dimensions
+  [ $dialog_height -lt 20 ] && dialog_height=20
+  [ $dialog_width -lt 75 ] && dialog_width=75
+  
+  # Count total operations
+  local total_operations=${#SELECTED_PACKAGES[@]}
+  [ "$INSTALL_NERD_FONT" = true ] && total_operations=$((total_operations + 1))
+  [ "$CONFIGURE_VIM" = true ] && total_operations=$((total_operations + 1))
+  [ "$CONFIGURE_ALIASES" = true ] && total_operations=$((total_operations + 1))
+  total_operations=$((total_operations + 1)) # For shell prompt configuration
+  
+  # Create a named pipe for progress updates
+  local pipe="/tmp/servercozy_progress_pipe"
+  rm -f "$pipe"
+  mkfifo "$pipe"
+  
+  # Start dialog gauge in background
+  dialog --colors \
+         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "\Z1Installation Progress\Zn" \
+         --gauge "\nPreparing installation...\n" \
+         $dialog_height $dialog_width 0 < "$pipe" &
+  local dialog_pid=$!
+  
+  # Function to update progress
+  update_gauge() {
+    local percent="$1"
+    local message="$2"
+    echo "$percent"
+    echo "XXX"
+    echo -e "\n$message\n"
+    echo "XXX"
+  }
+  
+  # Install packages with progress updates
+  local current=0
+  
+  for tool in "${SELECTED_PACKAGES[@]}"; do
+    IFS=':' read -r pkg desc <<< "$tool"
+    current=$((current + 1))
+    local percent=$((current * 100 / total_operations))
+    
+    update_gauge "$percent" "Installing: $pkg - $desc" > "$pipe"
+    install_package "$pkg" "$desc"
+  done
+  
+  # Handle special package cases
+  update_gauge "$percent" "Handling special package cases..." > "$pipe"
+  handle_special_packages
+  
   # Configure shell prompt
-  update_progress "Configuring shell prompt"
+  current=$((current + 1))
+  percent=$((current * 100 / total_operations))
+  update_gauge "$percent" "Configuring shell prompt..." > "$pipe"
   configure_prompt
   
-  # Check aliases configuration preference
-  update_progress "Checking aliases configuration preference"
-  ask_configure_aliases
+  # Install Nerd Font if selected
+  if [ "$INSTALL_NERD_FONT" = true ]; then
+    current=$((current + 1))
+    percent=$((current * 100 / total_operations))
+    update_gauge "$percent" "Installing JetBrainsMono Nerd Font..." > "$pipe"
+    install_nerd_font
+  fi
   
-  # Configure aliases
-  update_progress "Configuring aliases"
-  configure_aliases
+  # Configure Vim if selected
+  if [ "$CONFIGURE_VIM" = true ]; then
+    current=$((current + 1))
+    percent=$((current * 100 / total_operations))
+    update_gauge "$percent" "Configuring Vim..." > "$pipe"
+    configure_vim
+  fi
   
-  # Check Vim configuration preference
-  update_progress "Checking Vim configuration preference"
-  ask_configure_vim
+  # Configure aliases if selected
+  if [ "$CONFIGURE_ALIASES" = true ]; then
+    current=$((current + 1))
+    percent=$((current * 100 / total_operations))
+    update_gauge "$percent" "Configuring useful aliases..." > "$pipe"
+    configure_aliases
+  fi
   
-  # Configure vim
-  update_progress "Configuring vim"
-  configure_vim
+  # Complete
+  update_gauge "100" "Installation complete!" > "$pipe"
+  sleep 1
   
-  # Show summary
-  update_progress "Displaying installation summary"
-  show_summary
+  # Clean up
+  rm -f "$pipe"
+  wait $dialog_pid 2>/dev/null
+  
+  return 0
+}
+
+# Function to show installation summary using dialog
+tui_show_summary() {
+  local term_height=$(tput lines)
+  local term_width=$(tput cols)
+  local dialog_height=$((term_height * 3 / 4))
+  local dialog_width=$((term_width * 3 / 4))
+  
+  # Ensure minimum dimensions
+  [ $dialog_height -lt 20 ] && dialog_height=20
+  [ $dialog_width -lt 75 ] && dialog_width=75
+  
+  # Calculate elapsed time
+  local elapsed_time=""
+  if [ -n "$start_time" ]; then
+    local end_time=$(date +%s)
+    local total_seconds=$((end_time - start_time))
+    local minutes=$((total_seconds / 60))
+    local seconds=$((total_seconds % 60))
+    elapsed_time=" in ${minutes}m ${seconds}s"
+  fi
+  
+  # Build summary message
+  local summary="ServerCozy Setup Complete${elapsed_time}\n\n"
+  summary+="The following improvements have been made:\n\n"
+  
+  # Installed tools
+  summary+="Installed Tools:\n"
+  local all_tools=("${ESSENTIAL_TOOLS[@]}" "${RECOMMENDED_TOOLS[@]}" "${ADVANCED_TOOLS[@]}")
+  local installed_count=0
+  
+  # Temporarily silence the debugging logs
+  LOG_DEBUG_TEMP="$LOG_DEBUG"
+  LOG_DEBUG=false
+  
+  for tool in "${all_tools[@]}"; do
+    IFS=':' read -r pkg desc <<< "$tool"
+    # Check for installation without triggering debug logs
+    if command -v "$pkg" &>/dev/null || grep -q "ii  $pkg " <<< "$(dpkg -l 2>/dev/null)" || type "$pkg" &>/dev/null; then
+      summary+="  ✓ $pkg - $desc\n"
+      installed_count=$((installed_count+1))
+    fi
+  done
+  
+  # Restore debug setting
+  LOG_DEBUG="$LOG_DEBUG_TEMP"
+  
+  if [ $installed_count -eq 0 ]; then
+    summary+="  No tools were installed.\n"
+  fi
+  
+  # Shell customizations
+  summary+="\nShell Customizations:\n"
+  if [ "$CONFIGURE_PROMPT" = true ]; then
+    summary+="  ✓ Custom prompt installed\n"
+  fi
+  if [ "$CONFIGURE_ALIASES" = true ]; then
+    summary+="  ✓ Useful aliases configured\n"
+  fi
+  if [ "$CONFIGURE_VIM" = true ]; then
+    summary+="  ✓ Vim configured\n"
+  fi
+  if [ "$INSTALL_NERD_FONT" = true ]; then
+    summary+="  ✓ JetBrainsMono Nerd Font installed\n"
+  fi
+  
+  summary+="\nTo apply all changes, either:\n"
+  summary+="  1. Log out and log back in\n"
+  summary+="  2. Run: source ~/.bashrc (or ~/.zshrc if using zsh)\n\n"
+  summary+="For more information, type: help\n"
+  summary+="Log file saved to: $LOG_FILE"
+  
+  dialog --colors \
+         --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+         --title "\Z1Installation Summary\Zn" \
+         --msgbox "\n$summary\n" \
+         $dialog_height $dialog_width
+  
+  return 0
+}
+
+# Main function with TUI workflow
+main() {
+  # Store start time for elapsed time calculation
+  local start_time=$(date +%s)
+  
+  # Check lock file to prevent multiple instances
+  check_lock
+  
+  # Check if script is executable
+  update_progress "Checking script permissions"
+  check_executable
+  
+  # Set up logging
+  echo "=== ServerCozy Log $(date) ===" > "$LOG_FILE"
+  
+  # Check if dialog is available
+  if ! command -v dialog &>/dev/null; then
+    echo -e "${YELLOW}${BOLD}Dialog utility not found${NC}"
+    echo -e "This script requires the dialog utility for the TUI interface."
+    echo -e "Please install dialog and run the script again."
+    echo
+    echo -e "You can install dialog with one of the following commands:"
+    echo -e "  - Debian/Ubuntu: sudo apt install dialog"
+    echo -e "  - Fedora/RHEL: sudo dnf install dialog"
+    echo -e "  - Arch Linux: sudo pacman -S dialog"
+    echo -e "  - macOS: brew install dialog"
+    exit 1
+  fi
+  
+  # TUI workflow
+  show_welcome_screen
+  show_prerequisites_screen
+  tui_select_packages
+  tui_configure_options
+  tui_install_packages
+  tui_show_summary
   
   log "SUCCESS" "Installation completed successfully!"
 }
 
-# Function to check for updates to the script
+# Function to check for updates to the script using dialog
 check_for_updates() {
   if [ "$SKIP_UPDATE_CHECK" = true ]; then
     log "INFO" "Update check skipped due to command line flag"
@@ -2330,21 +2706,32 @@ check_for_updates() {
     rm -f "$temp_script"
     return 1
   fi
-  # Display both script version and OS version for clarity
+  
+  # Log version information
   log "INFO" "Script version: $SCRIPT_VERSION, Latest version: $remote_version"
   log "INFO" "OS version: $OS_NAME $OS_VERSION"
   
   # Compare versions (basic string comparison - assumes semantic versioning)
   if [ "$SCRIPT_VERSION" != "$remote_version" ]; then
-    # Display update notification
-    echo -e "\n${YELLOW}${BOLD}A new version of ServerCozy is available!${NC}"
-    echo -e "Current script version: ${YELLOW}$SCRIPT_VERSION${NC}"
-    echo -e "Latest script version: ${GREEN}$remote_version${NC}"
-    echo
-    echo -e "Would you like to update to the latest version? (y/n)"
-    read -p "> " do_update
+    # Display update notification using dialog
+    local term_height=$(tput lines)
+    local term_width=$(tput cols)
+    local dialog_height=$((term_height * 3 / 4))
+    local dialog_width=$((term_width * 3 / 4))
     
-    if [[ "$do_update" =~ ^[Yy]$ ]]; then
+    # Ensure minimum dimensions
+    [ $dialog_height -lt 20 ] && dialog_height=20
+    [ $dialog_width -lt 75 ] && dialog_width=75
+    
+    dialog --colors \
+           --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+           --title "\Z1Update Available\Zn" \
+           --yesno "\nA new version of ServerCozy is available!\n\nCurrent version: $SCRIPT_VERSION\nLatest version: $remote_version\n\nWould you like to update to the latest version?" \
+           $dialog_height $dialog_width
+    
+    local result=$?
+    
+    if [ $result -eq 0 ]; then
       log "INFO" "Updating to version $remote_version"
       
       # Make new script executable
@@ -2358,12 +2745,23 @@ check_for_updates() {
       # Replace current script with new one
       if cp "$temp_script" "$0"; then
         log "SUCCESS" "Successfully updated to version $remote_version"
-        echo -e "\n${GREEN}Update successful!${NC} Restarting script with new version."
+        
+        dialog --colors \
+               --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+               --title "\Z1Update Successful\Zn" \
+               --msgbox "\nUpdate successful! The script will now restart with the new version." \
+               $dialog_height $dialog_width
+        
         exec "$0" "$@" --skip-update
         # Script execution will stop here and restart with new version
       else
         log "ERROR" "Failed to update script due to permissions. Try running with sudo."
-        echo -e "\n${RED}Update failed.${NC} Please try manually downloading the latest version."
+        
+        dialog --colors \
+               --backtitle "ServerCozy v${SCRIPT_VERSION}" \
+               --title "\Z1Update Failed\Zn" \
+               --msgbox "\nFailed to update script due to permissions.\nPlease try running with sudo or manually downloading the latest version." \
+               $dialog_height $dialog_width
       fi
     else
       log "INFO" "Update skipped by user. Continuing with current version."
